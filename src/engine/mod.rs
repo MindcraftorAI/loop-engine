@@ -20,6 +20,8 @@ pub mod paths;
 pub mod pid;
 pub mod sentiment;
 pub mod storage;
+#[cfg(test)]
+pub mod test_support;
 pub mod yaml;
 
 pub use error::EngineError;
