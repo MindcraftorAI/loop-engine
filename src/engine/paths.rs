@@ -13,9 +13,13 @@ pub const LOOP_HOME_ENV: &str = "LOOP_HOME";
 
 /// Shared mutex for tests that mutate `LOOP_HOME` (or any env var). All
 /// such tests across the crate join this mutex so cargo's parallel
-/// runner doesn't race the env state. Public-to-tests-only.
+/// runner doesn't race the env state.
+///
+/// Audit Day 14 m3: `pub(crate)` not `pub` — the invariant is "test
+/// modules inside this crate join the same lock" and external test
+/// crates have no business reaching into it.
 #[cfg(test)]
-pub static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+pub(crate) static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Resolve LOOP_HOME — env var if set and non-empty, else `~/.loop`.
 pub fn loop_home() -> Result<PathBuf> {

@@ -178,9 +178,22 @@ fn handle_change(
     //     scan synthesized. Tail-from-now — pre-existing content already
     //     happened and is not part of "live" verification.
     // SessionStarted fires on first sight regardless of kind (A5).
-    let is_new = !cursors.contains_key(&change.path);
+    //
+    // Known cross-platform edge case (Day 14 audit M3): on macOS FSEvents
+    // can sometimes report `Create` for files that already existed when
+    // the watcher attached (historical-event delivery quirk). Combined
+    // with the initial-scan synthesis, ordering determines outcome:
+    // whichever PathChange arrives in the channel first wins. The
+    // canonicalization fix in `spawn_watcher` plus the first-sight rule
+    // mean SessionStarted still fires exactly once per file even in this
+    // race; cursor offset may be 0 (replay) vs EOF (tail) depending on
+    // ordering. Acceptable: low-frequency, non-corrupting, and the
+    // replayed bytes are valid JSONL.
     let cursor = match cursors.get_mut(&change.path) {
-        Some(c) => c,
+        Some(c) => {
+            debug!(path = %change.path.display(), "watcher: known cursor advancing");
+            c
+        }
         None => {
             emit_session_started(&change.path, &session_id, events_tx);
             let c = match change.kind {
@@ -193,9 +206,6 @@ fn handle_change(
             cursors.get_mut(&change.path).unwrap()
         }
     };
-    if !is_new {
-        debug!(path = %change.path.display(), "watcher: known cursor advancing");
-    }
 
     process_cursor(cursor, events_tx)?;
     Ok(())

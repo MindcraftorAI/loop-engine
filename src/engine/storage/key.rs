@@ -45,8 +45,13 @@ impl StorageKey {
     /// — accessible to engine modules (e.g. `LocalFsStorage::list`
     /// constructing keys from directory entries). Not part of the
     /// public engine surface.
+    ///
+    /// Audit Day 14 m8: hard `assert!` not `debug_assert!` — the
+    /// invariant check is cheap (three string ops on usually-short
+    /// strings) and release builds must not silently propagate
+    /// malformed keys.
     pub(crate) fn from_raw(s: String) -> Self {
-        debug_assert!(
+        assert!(
             !s.starts_with('/') && !s.contains("..") && !s.contains('\\'),
             "invalid StorageKey: {s}"
         );
@@ -121,7 +126,19 @@ mod tests {
 
     #[test]
     #[should_panic(expected = "invalid StorageKey")]
-    fn from_raw_rejects_leading_slash_debug_build() {
+    fn from_raw_rejects_leading_slash() {
         let _ = StorageKey::from_raw("/absolute".into());
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid StorageKey")]
+    fn from_raw_rejects_dotdot_traversal() {
+        let _ = StorageKey::from_raw("lessons/../etc/passwd".into());
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid StorageKey")]
+    fn from_raw_rejects_backslash() {
+        let _ = StorageKey::from_raw("lessons\\active\\foo".into());
     }
 }
