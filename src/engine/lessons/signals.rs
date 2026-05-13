@@ -21,9 +21,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, Context, Result};
 
-use crate::yaml::reader::parse_lesson_frontmatter;
-use crate::yaml::writer::serialize_lesson_frontmatter;
-use crate::yaml::{combine_frontmatter, split_frontmatter_normalized};
+use crate::engine::yaml::reader::parse_lesson_frontmatter;
+use crate::engine::yaml::writer::serialize_lesson_frontmatter;
+use crate::engine::yaml::{combine_frontmatter, split_frontmatter_normalized};
 
 use super::loader::{get_lesson_by_id, LoadedLesson};
 use super::lock::with_lock;
@@ -147,9 +147,9 @@ fn staged_tmp_path(target: &Path) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::paths;
-    use crate::paths::ENV_LOCK;
-    use crate::yaml::{combine_frontmatter, LessonFrontmatter, LessonStatus};
+    use crate::engine::paths;
+    use crate::engine::paths::ENV_LOCK;
+    use crate::engine::yaml::{combine_frontmatter, LessonFrontmatter, LessonStatus};
     use tempfile::TempDir;
 
     fn with_temp_loop_home<F: FnOnce(&TempDir) -> Result<()>>(f: F) {

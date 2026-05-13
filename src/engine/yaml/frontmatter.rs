@@ -198,7 +198,7 @@ mod tests {
     /// accepts the cleaned YAML (not a smoke test, a real parse).
     #[test]
     fn split_normalized_yaml_parses_cleanly() {
-        use crate::yaml::reader::parse_lesson_frontmatter;
+        use crate::engine::yaml::reader::parse_lesson_frontmatter;
 
         let source = "---\r\nid: les-aaaaaaaa\r\ndescription: minimal\r\nstatus: active\r\ncreated_at: 2026-05-13T00:00:00.000Z\r\napplied_count: 0\r\nthumbs_up_count: 0\r\nthumbs_down_count: 0\r\nexternal_signal_sources: []\r\n---\r\n\r\nbody\r\n";
         let split = split_frontmatter_normalized(source).unwrap();

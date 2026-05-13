@@ -10,9 +10,9 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
 
-use crate::paths;
-use crate::yaml::reader::parse_lesson_frontmatter;
-use crate::yaml::{split_frontmatter_normalized, LessonFrontmatter};
+use crate::engine::paths;
+use crate::engine::yaml::reader::parse_lesson_frontmatter;
+use crate::engine::yaml::{split_frontmatter_normalized, LessonFrontmatter};
 
 const LESSON_FILE_EXT: &str = ".md";
 /// Loose ID format guard. TS side uses generateLessonId which produces
@@ -82,8 +82,8 @@ pub fn lesson_file_path(status: &str, id: &str) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::paths::ENV_LOCK;
-    use crate::yaml::{combine_frontmatter, writer::serialize_lesson_frontmatter, LessonStatus};
+    use crate::engine::paths::ENV_LOCK;
+    use crate::engine::yaml::{combine_frontmatter, writer::serialize_lesson_frontmatter, LessonStatus};
     use tempfile::TempDir;
 
     fn with_temp_loop_home<F: FnOnce(&TempDir) -> Result<()>>(f: F) {

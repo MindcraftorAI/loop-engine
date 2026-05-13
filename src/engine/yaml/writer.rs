@@ -179,8 +179,8 @@ fn emit_nested_string(out: &mut String, key: &str, value: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::yaml::reader::parse_lesson_frontmatter;
-    use crate::yaml::schema::{Confidence, GeneratedBy, IngestSourceType, LessonStatus};
+    use crate::engine::yaml::reader::parse_lesson_frontmatter;
+    use crate::engine::yaml::schema::{Confidence, GeneratedBy, IngestSourceType, LessonStatus};
 
     fn minimum_fm() -> LessonFrontmatter {
         LessonFrontmatter {

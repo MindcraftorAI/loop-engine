@@ -19,8 +19,8 @@ use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use crate::config::DaemonConfig;
-use crate::paths;
-use crate::pid::pid_is_alive;
+use crate::engine::paths;
+use crate::engine::pid::pid_is_alive;
 
 /// Write current PID to ~/.loop/daemon.pid. Refuses to overwrite if a
 /// PID file already exists AND that PID is still alive.

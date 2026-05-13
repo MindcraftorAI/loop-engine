@@ -30,7 +30,7 @@ pub fn parse_lesson_frontmatter(yaml: &str) -> Result<LessonFrontmatter> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::yaml::schema::{Confidence, GeneratedBy, LessonStatus};
+    use crate::engine::yaml::schema::{Confidence, GeneratedBy, LessonStatus};
 
     #[test]
     fn parses_minimum_lesson() {
