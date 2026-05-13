@@ -11,13 +11,16 @@
 //! - CI grep verifies this. See [[feedback-workflow-cycle]].
 
 pub mod buffer;
+pub mod context;
+pub mod events;
 pub mod lessons;
 pub mod lifecycle;
 pub mod paths;
 pub mod pid;
+pub mod storage;
 pub mod yaml;
 
-// Day 14 Phase 2 (planned, lands when callers migrate):
-// pub mod context;
-// pub mod storage;
-// pub mod events;
+// Curated re-exports (engine prelude).
+pub use context::{Context, ContextBuilder, SessionId, TeamId, TenantId, UserId};
+pub use events::{EngineEvent, EventSource, EventSourceError};
+pub use storage::{LocalFsStorage, MemoryStorage, Storage, StorageError, StorageKey, Version};

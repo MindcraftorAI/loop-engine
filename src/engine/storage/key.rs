@@ -1,0 +1,127 @@
+//! Typed storage key.
+//!
+//! Slash-delimited path-like, always normalized (no `..`, no leading
+//! slash, no empty segments, no backslashes — abstract keys, not OS
+//! paths). Constructed via typed builder methods per resource — never
+//! from raw user input.
+//!
+//! Multi-tenant path routing lives HERE, not in `Storage` backends:
+//! `tenant_id = "local"` collapses to today's on-disk layout
+//! (`lessons/active/<id>.md`); other tenants prefix with
+//! `tenants/<id>/users/<id>/...`.
+
+use crate::engine::context::Context;
+
+/// Opaque storage key. Always canonical: slash-separated, no leading
+/// slash, no `..` traversals. Treat as a black box — only the
+/// `Storage` backend interprets it.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct StorageKey(String);
+
+impl StorageKey {
+    /// Lesson file by status (`active`, `archived`, `superseded`, etc.).
+    pub fn lesson(ctx: &Context, status: &str, id: &str) -> Self {
+        let suffix = format!("lessons/{status}/{id}.md");
+        Self(prefixed(ctx, &suffix))
+    }
+
+    /// Daemon PID file. Always under the tenant/user prefix (single
+    /// process per user is the invariant).
+    pub fn pid_file(ctx: &Context) -> Self {
+        Self(prefixed(ctx, "daemon.pid"))
+    }
+
+    /// Daemon config file (`~/.loop/config.yaml` in single-user mode).
+    pub fn config(ctx: &Context) -> Self {
+        Self(prefixed(ctx, "config.yaml"))
+    }
+
+    /// Daemon log file.
+    pub fn daemon_log(ctx: &Context) -> Self {
+        Self(prefixed(ctx, "daemon.log"))
+    }
+
+    /// Construct from a pre-validated path string. **Internal use only**
+    /// — accessible to engine modules (e.g. `LocalFsStorage::list`
+    /// constructing keys from directory entries). Not part of the
+    /// public engine surface.
+    pub(crate) fn from_raw(s: String) -> Self {
+        debug_assert!(
+            !s.starts_with('/') && !s.contains("..") && !s.contains('\\'),
+            "invalid StorageKey: {s}"
+        );
+        Self(s)
+    }
+
+    /// View as a slash-delimited string.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl AsRef<str> for StorageKey {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for StorageKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// Compose the tenant/user prefix.
+///
+/// Single-user (`tenant_id = "local"`): no prefix, keys match today's
+/// on-disk layout under `~/.loop/`.
+///
+/// Multi-tenant: prefixed with `tenants/<tenant>/users/<user>/`.
+fn prefixed(ctx: &Context, suffix: &str) -> String {
+    if ctx.tenant_id.as_str() == "local" {
+        suffix.to_string()
+    } else {
+        format!(
+            "tenants/{}/users/{}/{suffix}",
+            ctx.tenant_id, ctx.user_id
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn single_user_lesson_key_matches_disk_layout() {
+        let ctx = Context::single_user_local();
+        let key = StorageKey::lesson(&ctx, "active", "les-abc123");
+        assert_eq!(key.as_str(), "lessons/active/les-abc123.md");
+    }
+
+    #[test]
+    fn multi_tenant_lesson_key_prefixes_correctly() {
+        let ctx = Context::builder()
+            .tenant_id("acme")
+            .user_id("alice")
+            .session_id("s1")
+            .build();
+        let key = StorageKey::lesson(&ctx, "active", "les-abc123");
+        assert_eq!(
+            key.as_str(),
+            "tenants/acme/users/alice/lessons/active/les-abc123.md"
+        );
+    }
+
+    #[test]
+    fn pid_file_key_single_user() {
+        let ctx = Context::single_user_local();
+        assert_eq!(StorageKey::pid_file(&ctx).as_str(), "daemon.pid");
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid StorageKey")]
+    fn from_raw_rejects_leading_slash_debug_build() {
+        let _ = StorageKey::from_raw("/absolute".into());
+    }
+}

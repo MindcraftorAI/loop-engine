@@ -5,6 +5,21 @@ projects. Each lifted file carries an SPDX header noting the source and
 upstream copyright. The full license text of each upstream project is
 preserved below as required by MIT terms.
 
+## Non-MIT/Apache dependencies (SPDX-tracked)
+
+`loop-daemon` follows a strict no-AGPL/GPL/SSPL policy. Most dependencies
+are MIT or Apache-2.0 (or dual-licensed). Exceptions are listed below
+with their SPDX identifier and rationale.
+
+| Dependency | SPDX | Why we accept |
+|---|---|---|
+| `notify` (v8.x) | `CC0-1.0` | Cross-platform file-watching (FSEvents on macOS, inotify on Linux, ReadDirectoryChangesW on Windows). CC0-1.0 is the most permissive license possible — explicit public-domain dedication. Satisfies the no-AGPL/GPL/SSPL rule. No copyleft, no attribution requirement (we still attribute as a courtesy). Day 13 audit finding A4 flagged the missing declaration; this section closes it. |
+
+All other direct dependencies are MIT or Apache-2.0; see `Cargo.toml`
+comments for per-dep license attestations.
+
+---
+
 ## affaan-m/everything-claude-code (ecc2/)
 
 **Repository:** https://github.com/affaan-m/everything-claude-code

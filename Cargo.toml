@@ -56,6 +56,29 @@ libc = "0.2"
 # Used to coordinate lesson-file writes with the TS MCP server. MIT/Apache.
 fd-lock = "4"
 
+# Cross-platform file-watching (FSEvents on macOS, inotify on Linux,
+# ReadDirectoryChangesW on Windows). Used by the JSONL watcher.
+# License: CC0-1.0 — first non-MIT/Apache dep in the daemon; SPDX-recognized,
+# permissive, satisfies the no-AGPL/GPL/SSPL rule. See THIRD_PARTY_LICENSES.md.
+notify = "8"
+
+# JSON-line parsing for Claude Code session transcripts. MIT/Apache.
+serde_json = "1"
+
+# Async trait shims for object-safe `Storage` + `EventSource` traits.
+# Native `async fn in trait` (stable since 1.75) is object-safe but
+# returns non-Send futures by default; `async_trait` boxes the future
+# and marks Send, which we need for `Arc<dyn Storage>` across
+# tokio multi-thread runtime. MIT/Apache.
+async-trait = "0.1"
+
+# Byte buffer for storage payloads. Already a transitive of tokio/reqwest;
+# promoted to direct dep. MIT.
+bytes = "1"
+
+# `BoxStream` type alias used by `EventSource`. MIT/Apache.
+futures = { version = "0.3", default-features = false, features = ["std", "async-await"] }
+
 [dev-dependencies]
 tokio = { version = "1", features = ["test-util"] }
 tempfile = "3"
