@@ -232,6 +232,8 @@ impl SignalWriter for StorageBackedSignalWriter {
 /// timestamp: 2026-05-13T18:00:00Z
 /// ```
 fn render_signal_yaml(s: &SentimentSignal) -> String {
+    // Phase A C2 (Day 16b L3 fix): Display impls in `types.rs` emit
+    // snake_case strings. Schema-stable, not Debug-format-as-data.
     let hazards = if s.detected_hazards.is_empty() {
         "[]".to_string()
     } else {
@@ -239,16 +241,16 @@ fn render_signal_yaml(s: &SentimentSignal) -> String {
             "[{}]",
             s.detected_hazards
                 .iter()
-                .map(|h| format!("{h:?}"))
+                .map(|h| h.to_string())
                 .collect::<Vec<_>>()
                 .join(", ")
         )
     };
     format!(
         "item_id: {item}\n\
-         polarity: {polarity:?}\n\
+         polarity: {polarity}\n\
          calibrated_confidence: {conf}\n\
-         attribution_method: {method:?}\n\
+         attribution_method: {method}\n\
          detected_hazards: {hazards}\n\
          source_event_uuid: {uuid}\n\
          timestamp: {ts}\n",
@@ -422,8 +424,36 @@ mod tests {
         let stored = storage.get(&key).await.unwrap().unwrap();
         let body = std::str::from_utf8(&stored).unwrap();
         assert!(body.contains("item_id: les-quokka-special"));
-        assert!(body.contains("polarity: Positive"));
+        // Phase A C2: Display impls — snake_case, schema-stable.
+        assert!(body.contains("polarity: positive"));
+        assert!(body.contains("attribution_method: direct_mention"));
+        assert!(body.contains("detected_hazards: [low_confidence]"));
         assert!(body.contains("source_event_uuid: evt-1"));
+    }
+
+    #[test]
+    fn polarity_display_is_snake_case() {
+        use crate::engine::sentiment::types::Polarity;
+        assert_eq!(Polarity::Positive.to_string(), "positive");
+        assert_eq!(Polarity::Negative.to_string(), "negative");
+        assert_eq!(Polarity::Neutral.to_string(), "neutral");
+    }
+
+    #[test]
+    fn hazard_display_is_snake_case() {
+        assert_eq!(Hazard::Sarcasm.to_string(), "sarcasm");
+        assert_eq!(Hazard::AmbiguousReferent.to_string(), "ambiguous_referent");
+        assert_eq!(Hazard::SelfDirected.to_string(), "self_directed");
+        assert_eq!(Hazard::OutOfDistribution.to_string(), "out_of_distribution");
+    }
+
+    #[test]
+    fn attribution_method_display_is_snake_case() {
+        use crate::engine::sentiment::types::AttributionMethod;
+        assert_eq!(AttributionMethod::DirectMention.to_string(), "direct_mention");
+        assert_eq!(AttributionMethod::PronounResolved.to_string(), "pronoun_resolved");
+        assert_eq!(AttributionMethod::Recency.to_string(), "recency");
+        assert_eq!(AttributionMethod::Salience.to_string(), "salience");
     }
 
     #[tokio::test]

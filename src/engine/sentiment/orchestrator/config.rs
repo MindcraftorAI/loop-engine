@@ -48,10 +48,11 @@ pub enum HostVersionAction {
 /// the tripwire is OFF (default — appropriate for local-dev and any
 /// build that hasn't pinned a tested host range).
 ///
-/// String comparison is lexicographic — adequate for the dotted-decimal
-/// versions Claude Code emits (e.g. `"2.1.139"` < `"2.1.40"` would be
-/// WRONG with lex sort; semver-aware comparison is a Day 18+ refinement
-/// when tested_range gets real values).
+/// Phase A C1 (Day 17 m4 audit fix): semver-aware comparison when all
+/// three strings (low/high bounds + incoming version) parse as semver;
+/// falls back to lexicographic compare with a tracing warning when any
+/// string fails to parse. The fallback preserves pre-Phase-A behavior
+/// for non-semver-shaped strings.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct HostVersionPolicy {
@@ -69,12 +70,83 @@ impl HostVersionPolicy {
     }
 
     /// True when `version` is outside `tested_range`. Returns false if
-    /// the policy is off (no range configured) — caller treats that as
-    /// "no tripwire".
+    /// the policy is off (no range configured).
     pub fn is_out_of_range(&self, version: &str) -> bool {
-        match &self.tested_range {
-            None => false,
-            Some(range) => !range.contains(&version.to_string()),
+        let Some(range) = &self.tested_range else {
+            return false;
+        };
+        // Try semver-aware compare first.
+        if let (Ok(lo), Ok(hi), Ok(v)) = (
+            semver::Version::parse(range.start()),
+            semver::Version::parse(range.end()),
+            semver::Version::parse(version),
+        ) {
+            return v < lo || v > hi;
         }
+        // Fallback: lex compare with a one-shot warning.
+        tracing::warn!(
+            version = %version,
+            range_lo = %range.start(),
+            range_hi = %range.end(),
+            "host version tripwire fell back to lexicographic comparison (non-semver strings)"
+        );
+        !range.contains(&version.to_string())
+    }
+}
+
+#[cfg(test)]
+mod host_version_policy_tests {
+    use super::*;
+
+    #[test]
+    fn off_policy_never_out_of_range() {
+        let p = HostVersionPolicy::off();
+        assert!(!p.is_out_of_range("any-string"));
+        assert!(!p.is_out_of_range("2.1.139"));
+    }
+
+    #[test]
+    fn semver_in_range_returns_false() {
+        let p = HostVersionPolicy {
+            tested_range: Some("2.0.0".to_string()..="2.1.999".to_string()),
+            action: HostVersionAction::Abstain,
+        };
+        assert!(!p.is_out_of_range("2.0.0"));
+        assert!(!p.is_out_of_range("2.1.5"));
+        assert!(!p.is_out_of_range("2.1.999"));
+    }
+
+    /// Phase A C1 regression: the Day 17 m4 gotcha — `"2.1.139" < "2.1.40"`
+    /// is TRUE under lex compare (wrong) but FALSE under semver compare
+    /// (right). With semver-aware comparison "2.1.139" sorts correctly
+    /// inside the [2.1.40, 2.1.200] range.
+    #[test]
+    fn semver_resolves_dotted_decimal_gotcha() {
+        let p = HostVersionPolicy {
+            tested_range: Some("2.1.40".to_string()..="2.1.200".to_string()),
+            action: HostVersionAction::Abstain,
+        };
+        assert!(!p.is_out_of_range("2.1.139"));
+    }
+
+    #[test]
+    fn semver_out_of_range_returns_true() {
+        let p = HostVersionPolicy {
+            tested_range: Some("2.0.0".to_string()..="2.1.999".to_string()),
+            action: HostVersionAction::Abstain,
+        };
+        assert!(p.is_out_of_range("1.9.9"));
+        assert!(p.is_out_of_range("3.0.0"));
+    }
+
+    /// Non-semver strings fall back to lex compare.
+    #[test]
+    fn non_semver_falls_back_to_lex() {
+        let p = HostVersionPolicy {
+            tested_range: Some("alpha".to_string()..="zulu".to_string()),
+            action: HostVersionAction::Abstain,
+        };
+        assert!(!p.is_out_of_range("delta"));
+        assert!(p.is_out_of_range("aaa"));
     }
 }

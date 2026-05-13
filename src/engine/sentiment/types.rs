@@ -22,6 +22,18 @@ pub enum Polarity {
     Neutral,
 }
 
+/// Phase A C2 (Day 16b L3 fix): snake_case Display replaces `{:?}`
+/// Debug-format-as-data in YAML serialization. Schema-stable.
+impl std::fmt::Display for Polarity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Polarity::Positive => "positive",
+            Polarity::Negative => "negative",
+            Polarity::Neutral => "neutral",
+        })
+    }
+}
+
 // =====================================================================
 // Hazard — non_exhaustive (audit S6: never Vec<String>)
 // =====================================================================
@@ -51,6 +63,21 @@ pub enum Hazard {
     SelfDirected,
 }
 
+/// Phase A C2: snake_case Display for YAML serialization.
+impl std::fmt::Display for Hazard {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Hazard::Sarcasm => "sarcasm",
+            Hazard::AmbiguousReferent => "ambiguous_referent",
+            Hazard::Hyperbole => "hyperbole",
+            Hazard::LowConfidence => "low_confidence",
+            Hazard::PrivacyConcern => "privacy_concern",
+            Hazard::OutOfDistribution => "out_of_distribution",
+            Hazard::SelfDirected => "self_directed",
+        })
+    }
+}
+
 // =====================================================================
 // AttributionMethod — non_exhaustive; abstain is Option::None not a variant
 // =====================================================================
@@ -71,6 +98,18 @@ pub enum AttributionMethod {
     Recency,
     /// Pass 4: classifier judged top-K candidates and pointed at one.
     Salience,
+}
+
+/// Phase A C2: snake_case Display for YAML serialization.
+impl std::fmt::Display for AttributionMethod {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            AttributionMethod::DirectMention => "direct_mention",
+            AttributionMethod::PronounResolved => "pronoun_resolved",
+            AttributionMethod::Recency => "recency",
+            AttributionMethod::Salience => "salience",
+        })
+    }
 }
 
 // =====================================================================

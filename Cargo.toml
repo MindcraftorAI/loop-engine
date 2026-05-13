@@ -93,6 +93,12 @@ dashmap = "6"
 # promoted to direct dep for clarity. MIT.
 tokio-stream = "0.1"
 
+# Semver-aware version comparison for `HostVersionPolicy`. Day 17 m4
+# audit fix: lexicographic compare on dotted-decimal versions breaks
+# at the "2.1.139" vs "2.1.40" gotcha. Already a transitive in
+# Cargo.lock; Phase A C1 promotes to direct dep. MIT OR Apache-2.0.
+semver = { version = "1", default-features = false }
+
 [features]
 # Test fixtures: ships `MockSentimentClassifier` for cross-crate test
 # code (integration tests, future external consumers). Production

@@ -604,6 +604,7 @@ dependencies = [
  "loop-daemon",
  "notify",
  "regex",
+ "semver",
  "serde",
  "serde_json",
  "serde_yml",
