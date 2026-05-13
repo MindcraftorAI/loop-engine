@@ -10,3 +10,4 @@ pub mod lifecycle;
 pub mod observability;
 pub mod paths;
 pub mod pid;
+pub mod yaml;
