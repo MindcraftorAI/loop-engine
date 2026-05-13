@@ -808,4 +808,114 @@ mod tests {
             vec!["sentiment_positive".to_string()]
         );
     }
+
+    // -----------------------------------------------------------------
+    // Phase C C-C3 audit-fix: standalone tests for `record_applied`
+    // (D-C10 §C planned 4 tests; the original C-C3 commit shipped only
+    // manifest e2e coverage. Audit A-m8 / m8 flagged the gap.)
+    // -----------------------------------------------------------------
+
+    #[tokio::test]
+    async fn record_applied_lesson_not_found_errors() {
+        let h = TestHarness::in_memory();
+        let result = record_applied(
+            &h.ctx,
+            h.storage.as_ref(),
+            "les-missing0",
+            chrono::Utc::now(),
+        )
+        .await;
+        match result {
+            Err(EngineError::LessonNotFound { id }) => assert_eq!(id, "les-missing0"),
+            other => panic!("expected LessonNotFound, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn record_applied_increments_counter_and_stamps_last_applied_at() {
+        let h = TestHarness::in_memory();
+        let key = StorageKey::lesson(&h.ctx, "active", "les-applied1");
+        h.storage
+            .put(&key, _Bytes::from(seeded_lesson_yaml("les-applied1")))
+            .await
+            .unwrap();
+        let now = chrono::Utc::now();
+        let updated = record_applied(&h.ctx, h.storage.as_ref(), "les-applied1", now)
+            .await
+            .unwrap();
+        // applied_count went 0 → 1.
+        assert_eq!(updated.frontmatter.applied_count, 1);
+        // last_applied_at + updated_at populated with `now` (round-trip
+        // through rfc3339-millis is lossy at sub-millis but exact above).
+        assert!(updated.frontmatter.last_applied_at.is_some());
+        assert!(updated.frontmatter.updated_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn record_applied_repeated_calls_accumulate_counter() {
+        // 5 sequential calls → counter goes 0 → 5. No idempotency
+        // (unlike record_signal — applied is a count, not a set).
+        let h = TestHarness::in_memory();
+        let key = StorageKey::lesson(&h.ctx, "active", "les-acmltrct");
+        h.storage
+            .put(&key, _Bytes::from(seeded_lesson_yaml("les-acmltrct")))
+            .await
+            .unwrap();
+        for _ in 0..5 {
+            let _ = record_applied(
+                &h.ctx,
+                h.storage.as_ref(),
+                "les-acmltrct",
+                chrono::Utc::now(),
+            )
+            .await
+            .unwrap();
+        }
+        let final_loaded = get_by_id(&h.ctx, h.storage.as_ref(), "les-acmltrct")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(final_loaded.frontmatter.applied_count, 5);
+    }
+
+    #[tokio::test]
+    async fn record_applied_preserves_unrelated_frontmatter_fields() {
+        // Ensure record_applied's RMW only touches the targeted fields
+        // and doesn't drop / reorder anything else (S119, frontmatter
+        // field-order preservation).
+        let h = TestHarness::in_memory();
+        let key = StorageKey::lesson(&h.ctx, "active", "les-prsrvfld");
+        let yaml = "---\n\
+             id: les-prsrvfld\n\
+             description: \"original description\"\n\
+             status: active\n\
+             created_at: \"2026-05-13T00:00:00.000Z\"\n\
+             target_skill: \"some-skill\"\n\
+             applied_count: 7\n\
+             thumbs_up_count: 3\n\
+             thumbs_down_count: 0\n\
+             external_signal_sources: [\"thumbs_up\"]\n\
+             ---\n\
+             original body\n";
+        h.storage.put(&key, _Bytes::from(yaml)).await.unwrap();
+        let updated = record_applied(
+            &h.ctx,
+            h.storage.as_ref(),
+            "les-prsrvfld",
+            chrono::Utc::now(),
+        )
+        .await
+        .unwrap();
+        // Mutated fields:
+        assert_eq!(updated.frontmatter.applied_count, 8);
+        assert!(updated.frontmatter.last_applied_at.is_some());
+        // Untouched fields:
+        assert_eq!(updated.frontmatter.description, "original description");
+        assert_eq!(updated.frontmatter.target_skill.as_deref(), Some("some-skill"));
+        assert_eq!(updated.frontmatter.thumbs_up_count, 3);
+        assert_eq!(
+            updated.frontmatter.external_signal_sources,
+            vec!["thumbs_up".to_string()]
+        );
+    }
 }

@@ -30,7 +30,16 @@ pub use error::EngineError;
 // Curated re-exports (engine prelude).
 pub use context::{Context, ContextBuilder, SessionId, TeamId, TenantId, UserId};
 pub use events::{EngineEvent, EventSource, EventSourceError, HostVersion, ProjectTag};
+// Phase B gate types — exposed via `ActiveLesson::gate` (a public field
+// of the prelude-level `ActiveLesson`), so the gate types belong in the
+// prelude alongside it.
+pub use lessons::{
+    check_promotion_gate, BlockReason, GateDecision, PassReason, PromotionConfig,
+};
 pub use manifest::{assemble, ActiveLesson, AssembleConfig, AssemblyStats, Manifest};
 pub use storage::{
     LocalFsStorage, MemoryStorage, Storage, StorageError, StorageKey, StorageMetadata, Version,
 };
+// `LessonStatus` is a public field of `ActiveLesson` (and `AssembleConfig`
+// holds a `Vec<LessonStatus>`), so it belongs in the prelude.
+pub use yaml::LessonStatus;

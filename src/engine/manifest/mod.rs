@@ -40,7 +40,7 @@ use crate::engine::yaml::{
 /// `#[non_exhaustive]` so the engine can grow new sections without a
 /// SemVer break. External callers should pattern-match with wildcards
 /// or use field-access (which IS forward-compatible).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Manifest {
     /// Active lessons in deterministic order (per [`AssembleConfig`]).
@@ -55,7 +55,7 @@ pub struct Manifest {
 /// (we do NOT expose the full [`crate::engine::yaml::LessonFrontmatter`]
 /// — every counter would become a SemVer hinge) PLUS the engine-side
 /// wedge addition `gate`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct ActiveLesson {
     pub id: String,
@@ -76,11 +76,10 @@ pub struct ActiveLesson {
     /// backend failed to return metadata (counted in
     /// `AssemblyStats::gate_skip_count`).
     pub gate: Option<GateDecision>,
-    /// Internal: lesson `created_at` parsed from frontmatter — used
-    /// as the secondary sort key (D-C6). Kept `pub(crate)` so the
-    /// manifest module's sort logic can read it without exposing
-    /// every counter in the public `ActiveLesson` shape.
-    pub(crate) created_at_internal: Option<DateTime<Utc>>,
+    // Lesson `created_at` parsed from frontmatter — secondary sort key
+    // (D-C6). Strictly private; the manifest module's sort logic reads
+    // it directly. NOT in the public field set per D-C2 (TS-parity-trim).
+    created_at_internal: Option<DateTime<Utc>>,
 }
 
 /// Configuration knobs for [`assemble`]. Defaults match the TS
@@ -127,7 +126,7 @@ impl Default for AssembleConfig {
 /// Diagnostics + counters from one [`assemble`] pass. `assembled_at`
 /// stamps the wall-clock at the start of assembly (the same value
 /// passed in as `now`) — useful for CLI rendering and cache freshness.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct AssemblyStats {
     /// Wall-clock at assembly start (the `now` parameter to [`assemble`]).
@@ -165,9 +164,18 @@ impl AssemblyStats {
 /// clock-injection parameter (Day 16a D4 pattern), returns the typed
 /// `EngineError` family.
 ///
-/// C-C2 ships listing, filtering, ordering, body-preview construction,
-/// and per-lesson soft-fail. C-C3 will add gate annotation and the
-/// `record_applied` side-effect.
+/// Phase C-C2 + C-C3 + audit-fix close: single-load pipeline.
+///
+/// 1. List → load each lesson ONCE (per status). Per-lesson failures
+///    soft-fail per D-C8; backend `list` failures are fatal.
+/// 2. Deterministic 3-key sort (D-C6) via `sort_by_cached_key` to avoid
+///    cloning the `id: String` per comparison.
+/// 3. Truncate to `lesson_limit`.
+/// 4. Per-lesson gate annotation — uses the CACHED frontmatter from
+///    step 1, fetches only fresh `Storage::metadata` (audit A-M3:
+///    eliminates the redundant get+parse per lesson).
+/// 5. `record_applied` in PARALLEL via `futures::future::join_all`
+///    (audit A-M2: was serial, ~250ms at lesson_limit=5; now ~50ms).
 pub async fn assemble(
     ctx: &Context,
     storage: &dyn Storage,
@@ -176,70 +184,90 @@ pub async fn assemble(
 ) -> Result<Manifest, EngineError> {
     validate_config(config)?;
     let mut stats = AssemblyStats::empty(now);
-    let mut collected: Vec<ActiveLesson> = Vec::new();
+    let mut records: Vec<LoadedRecord> = Vec::new();
 
-    // 1. List → load per status. A `Storage::list` failure on ANY
-    //    status is fatal (no recovery — D-C8). Per-lesson failures
-    //    soft-fail.
+    // Step 1: list → single-load per lesson. Holding the parsed
+    // frontmatter alongside the trimmed `ActiveLesson` means step 4
+    // never re-loads (audit A-M3 fix).
     for status in &config.statuses {
         let prefix = StorageKey::lesson_status_prefix(ctx, status.as_str());
         let keys = storage.list(&prefix).await?;
         for key in keys {
             stats.total_listed += 1;
-            match load_one_lesson(storage, &key, *status, config.body_preview_len).await {
-                Ok(Some(lesson)) => collected.push(lesson),
-                Ok(None) => stats.skipped_count += 1, // non-fatal skip (logged inside)
-                Err(_) => {
-                    // load_one_lesson returns Err only for kinds we
-                    // explicitly treat as soft-fail (parse / yaml).
-                    // Backend I/O errors bubble before this point.
-                    stats.skipped_count += 1;
-                }
+            match load_one_record(storage, &key, *status, config.body_preview_len).await {
+                Ok(Some(record)) => records.push(record),
+                Ok(None) => stats.skipped_count += 1,
+                Err(_) => stats.skipped_count += 1,
             }
         }
     }
 
-    // 2. Deterministic 3-key sort (D-C6).
-    collected.sort_by_key(order_key);
+    // Step 2: deterministic 3-key sort. `sort_by_cached_key` calls the
+    // closure once per element (cached) rather than twice per
+    // comparison, so the `id.clone()` cost is O(n) not O(n log n)
+    // (audit A-m11 fix).
+    records.sort_by_cached_key(|r| order_key(&r.active));
 
-    // 3. Truncate to lesson_limit (post-sort).
-    if collected.len() > config.lesson_limit {
-        collected.truncate(config.lesson_limit);
+    // Step 3: truncate to lesson_limit.
+    if records.len() > config.lesson_limit {
+        records.truncate(config.lesson_limit);
     }
 
-    // 4. Per-lesson gate annotation (the wedge surfaces here).
-    //    `Storage::metadata()` failure → `gate: None` + skip count;
-    //    a successful metadata read feeds `check_promotion_gate`.
+    // Step 4: gate annotation. CACHED frontmatter from step 1 + fresh
+    // metadata fetch. The two failure cases are now distinguished
+    // explicitly per audit A-M4 (lesson-vanished vs metadata-absent).
     if config.annotate_with_gate {
-        for lesson in collected.iter_mut() {
-            let key = StorageKey::lesson(ctx, lesson.status.as_str(), &lesson.id);
-            // Reload the frontmatter for the gate input (cheap — single
-            // get + parse). We can't use the trimmed `ActiveLesson`
-            // shape because the gate needs `LessonFrontmatter`.
-            // Soft-fail per D-C8.
-            match load_frontmatter_for_gate(storage, &key).await {
-                Ok(Some((fm, metadata))) => {
-                    lesson.gate = Some(check_promotion_gate(
-                        &fm,
+        for r in records.iter_mut() {
+            let metadata_result = storage.metadata(&r.key).await;
+            match metadata_result {
+                Ok(Some(metadata)) => {
+                    r.active.gate = Some(check_promotion_gate(
+                        &r.fm,
                         &metadata,
                         &config.promotion_config,
                         now,
                     ));
                 }
-                _ => {
+                Ok(None) => {
+                    // Lesson vanished between listing and gate-load
+                    // (race). Storage.get would have returned bytes
+                    // but metadata returns None — keep the lesson in
+                    // the manifest, skip its gate annotation.
+                    warn!(
+                        key = %r.key,
+                        "manifest: lesson vanished between list and gate annotation"
+                    );
+                    stats.gate_skip_count += 1;
+                }
+                Err(e) => {
+                    // Backend I/O error reading metadata. Soft-fail
+                    // per D-C8 — manifest delivery is more important
+                    // than per-lesson gate visibility.
+                    warn!(
+                        key = %r.key,
+                        error = %e,
+                        "manifest: metadata fetch failed for gate annotation"
+                    );
                     stats.gate_skip_count += 1;
                 }
             }
         }
     }
 
-    // 5. `record_applied` side-effect (TS-parity, opt-out via
-    //    `record_applied: false`). Failures are swallowed per D-C8.
+    // Step 5: `record_applied` in parallel. Each future is independent
+    // (different lesson key) so concurrent execution is safe; the CAS
+    // discipline inside `record_applied` handles per-key contention.
+    // futures::future::join_all polls inline on the current task — no
+    // 'static / Send constraints from spawning.
     if config.record_applied {
-        for lesson in collected.iter() {
-            if let Err(e) = record_applied(ctx, storage, &lesson.id, now).await {
+        let futures = records
+            .iter()
+            .map(|r| record_applied(ctx, storage, &r.active.id, now));
+        let results = futures::future::join_all(futures).await;
+        for (r, result) in records.iter().zip(results.iter()) {
+            if let Err(e) = result {
                 warn!(
-                    id = %lesson.id,
+                    id = %r.active.id,
                     error = %e,
                     "manifest: record_applied failed; counter not incremented"
                 );
@@ -248,88 +276,35 @@ pub async fn assemble(
         }
     }
 
+    // Project the internal records to the public `ActiveLesson` shape.
+    let active_lessons: Vec<ActiveLesson> = records.into_iter().map(|r| r.active).collect();
+
     Ok(Manifest {
-        active_lessons: collected,
+        active_lessons,
         assembly_stats: stats,
     })
 }
 
-/// Re-load (frontmatter, metadata) for the gate input. The trimmed
-/// `ActiveLesson` shape doesn't retain the full `LessonFrontmatter`,
-/// so we go back to storage for the gate annotation pass. Returns
-/// `Ok(None)` if the key vanished between listing and gate-load (race).
-async fn load_frontmatter_for_gate(
-    storage: &dyn Storage,
-    key: &StorageKey,
-) -> Result<
-    Option<(
-        crate::engine::yaml::LessonFrontmatter,
-        crate::engine::storage::StorageMetadata,
-    )>,
-    EngineError,
-> {
-    let bytes = match storage.get(key).await? {
-        Some(b) => b,
-        None => return Ok(None),
-    };
-    let metadata = match storage.metadata(key).await? {
-        Some(m) => m,
-        None => return Ok(None),
-    };
-    let content = std::str::from_utf8(&bytes)
-        .map_err(|e| EngineError::Parse(format!("non-utf8 lesson bytes for {key}: {e}")))?;
-    let split = split_frontmatter_normalized(content)
-        .map_err(|e| EngineError::Parse(format!("split frontmatter {key}: {e}")))?;
-    let fm = parse_lesson_frontmatter(&split.yaml)
-        .map_err(|e| EngineError::Yaml(e.into()))?;
-    Ok(Some((fm, metadata)))
+/// Internal: per-lesson record carrying both the public-facing
+/// `ActiveLesson` AND the cached frontmatter + StorageKey. Lets the
+/// gate-annotation pass reuse the parsed frontmatter from the listing
+/// pass (audit A-M3 fix — eliminates the per-lesson redundant
+/// get+parse).
+struct LoadedRecord {
+    active: ActiveLesson,
+    fm: LessonFrontmatter,
+    key: StorageKey,
 }
 
-/// Sort-key tuple for the three-key deterministic order. Aliased
-/// because clippy's `type_complexity` lint dings the inline form;
-/// the tuple shape is intentional (drop-in to `sort_by_key`).
-type OrderKey = (
-    std::cmp::Reverse<Option<DateTime<Utc>>>,
-    std::cmp::Reverse<Option<DateTime<Utc>>>,
-    String,
-);
-
-/// Three-key deterministic sort key (D-C6). Sort priority:
-/// 1. `last_applied_at` DESC (`None` LAST — `Reverse(Option)` puts
-///    `None` at the maximum end)
-/// 2. `created_at` DESC (`None` LAST, same trick)
-/// 3. `id` ASC (final tiebreaker — guarantees deterministic output
-///    across runs for git-diff-friendly CLI rendering)
-fn order_key(l: &ActiveLesson) -> OrderKey {
-    (
-        std::cmp::Reverse(l.last_applied_at),
-        std::cmp::Reverse(l.created_at_for_sort()),
-        l.id.clone(),
-    )
-}
-
-impl ActiveLesson {
-    /// `created_at` exposed for sort. Stored separately from
-    /// `last_applied_at` because the manifest doesn't surface it
-    /// directly (TS-parity-trim per D-C2); we keep it internal to
-    /// preserve the secondary sort key.
-    fn created_at_for_sort(&self) -> Option<DateTime<Utc>> {
-        self.created_at_internal
-    }
-}
-
-/// Load one lesson key into an `ActiveLesson`. Returns:
-/// - `Ok(Some(lesson))` — happy path.
-/// - `Ok(None)` — the key didn't resolve to a valid lesson (file gone
-///   between list and get, or non-lesson key swept up by the prefix).
-/// - `Err(EngineError)` — soft-fail signal (parse/yaml/utf8). Caller
-///   bumps `skipped_count`.
-async fn load_one_lesson(
+/// Load one lesson key into a `LoadedRecord`. Caller-side soft-fail
+/// semantics same as `load_one_lesson` was: returns `Ok(None)` for
+/// missing-on-fetch (race), `Err` for parse/yaml/utf8 failures.
+async fn load_one_record(
     storage: &dyn Storage,
     key: &StorageKey,
     expected_status: LessonStatus,
     body_preview_len: usize,
-) -> Result<Option<ActiveLesson>, EngineError> {
+) -> Result<Option<LoadedRecord>, EngineError> {
     let bytes: Bytes = match storage.get(key).await? {
         Some(b) => b,
         None => return Ok(None),
@@ -360,17 +335,45 @@ async fn load_one_lesson(
     let last_applied_at = parse_iso_or_none(fm.last_applied_at.as_deref());
     let created_at_internal = parse_iso_or_none(Some(&fm.created_at));
 
-    Ok(Some(ActiveLesson {
-        id: fm.id,
-        description: fm.description,
+    let active = ActiveLesson {
+        id: fm.id.clone(),
+        description: fm.description.clone(),
         status: expected_status,
         body_preview,
         applied_count: fm.applied_count,
         last_applied_at,
-        target_skill: fm.target_skill,
-        gate: None, // C-C3 populates
+        target_skill: fm.target_skill.clone(),
+        gate: None, // step 4 populates
         created_at_internal,
+    };
+    Ok(Some(LoadedRecord {
+        active,
+        fm,
+        key: key.clone(),
     }))
+}
+
+/// Sort-key tuple for the three-key deterministic order. Aliased
+/// because clippy's `type_complexity` lint dings the inline form;
+/// the tuple shape is intentional (drop-in to `sort_by_key`).
+type OrderKey = (
+    std::cmp::Reverse<Option<DateTime<Utc>>>,
+    std::cmp::Reverse<Option<DateTime<Utc>>>,
+    String,
+);
+
+/// Three-key deterministic sort key (D-C6). Sort priority:
+/// 1. `last_applied_at` DESC (`None` LAST — `Reverse(Option)` puts
+///    `None` at the maximum end)
+/// 2. `created_at` DESC (`None` LAST, same trick)
+/// 3. `id` ASC (final tiebreaker — guarantees deterministic output
+///    across runs for git-diff-friendly CLI rendering)
+fn order_key(l: &ActiveLesson) -> OrderKey {
+    (
+        std::cmp::Reverse(l.last_applied_at),
+        std::cmp::Reverse(l.created_at_internal),
+        l.id.clone(),
+    )
 }
 
 /// Build the body preview per OQ-C2: char-based slice (multi-byte
@@ -803,21 +806,41 @@ mod tests {
 
     #[tokio::test]
     async fn wedge_at_manifest_layer_backdated_lesson_surfaces_blocked_gate() {
-        // The marketing-wedge regression at the MANIFEST layer (one
-        // step above the gate's own s21 regression in lessons/gate.rs).
-        // A lesson backdated in YAML but freshly written to in-memory
-        // storage must show up in `manifest.active_lessons[0].gate`
-        // as `Block { reasons: [TamperedAge, ...] }` — proving the
-        // wedge claim flows end-to-end through manifest assembly.
+        // The marketing-wedge regression at the MANIFEST layer.
+        // Mirrors lessons/gate.rs::s21 ISOLATION assertion (Phase B
+        // audit M3 fix pattern + Phase C audit A-M1 fix): the wedge
+        // test must prove TamperedAge is the SOLE block reason — not
+        // merely "TamperedAge is among the reasons" — otherwise other
+        // rules co-firing could mask wedge regressions.
+        //
+        // Direct-write a lesson with backdated frontmatter AND every
+        // other rule passing in isolation: birthtime (= when the put
+        // happens, ie wall-clock now) > frontmatter created_at
+        // (2026-04-13) by ~30 days, so TamperedAge fires. All other
+        // rules are satisfied by the rounded-out fixture, so the
+        // assertion `reasons.len() == 1` proves the wedge specifically
+        // caught the backdate.
+        use crate::engine::storage::StorageKey;
+
         let h = TestHarness::in_memory();
-        h.seed_lesson_with_created_at(
-            "active",
-            "les-wedge002",
-            "body",
-            "2026-04-13T00:00:00Z", // 30 days before now_t()
-        )
-        .await
-        .unwrap();
+        let id = "les-wedge002";
+        let backdated = "2026-04-13T00:00:00Z";
+        let yaml = format!(
+            "---\n\
+             id: {id}\n\
+             description: \"wedge regression\"\n\
+             status: active\n\
+             created_at: \"{backdated}\"\n\
+             causal_narrative:\n  trigger: \"t\"\n  failure_mode: \"f\"\n  correction: \"c\"\n  confidence: inferred\n  evidence_refs: []\n  generated_by: llm\n  generated_at: \"{backdated}\"\n\
+             applied_count: 5\n\
+             thumbs_up_count: 2\n\
+             thumbs_down_count: 0\n\
+             external_signal_sources:\n  - thumbs_up\n\
+             ---\n\
+             body\n"
+        );
+        let key = StorageKey::lesson(&h.ctx, "active", id);
+        h.storage.put(&key, Bytes::from(yaml)).await.unwrap();
 
         let m = assemble(
             &h.ctx,
@@ -834,18 +857,37 @@ mod tests {
             .expect("wedge: expected gate annotation");
         match gate {
             GateDecision::Block { reasons } => {
+                assert_eq!(
+                    reasons.len(),
+                    1,
+                    "wedge regression FAILED at manifest layer: expected exactly 1 \
+                     reason (TamperedAge), got {} reasons: {reasons:?}. The wedge \
+                     test is over-passing — other rules co-fire, so we can't prove \
+                     the wedge specifically caught the backdate.",
+                    reasons.len()
+                );
                 assert!(
-                    reasons.iter().any(|r| matches!(
-                        r,
+                    matches!(
+                        reasons[0],
                         crate::engine::lessons::BlockReason::TamperedAge { .. }
-                    )),
-                    "wedge invariant FAILED at manifest layer: TamperedAge missing. \
-                     Got reasons: {reasons:?}"
+                    ),
+                    "wedge invariant FAILED: sole block reason should be TamperedAge, \
+                     got {:?}",
+                    reasons[0]
                 );
             }
             other => panic!(
                 "wedge: expected Block on backdated lesson, got {other:?}"
             ),
         }
+
+        // Verify cross-cutting behavior: even though the gate blocks
+        // promotion eligibility, the manifest still delivered the
+        // lesson AND `record_applied` (default true) incremented the
+        // counter from 5 → 6. Wedge blocks PROMOTION, not manifest
+        // delivery or applied tracking.
+        use crate::engine::lessons::get_by_id;
+        let after = get_by_id(&h.ctx, h.storage.as_ref(), id).await.unwrap().unwrap();
+        assert_eq!(after.frontmatter.applied_count, 6);
     }
 }
