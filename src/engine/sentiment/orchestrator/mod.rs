@@ -622,14 +622,20 @@ mod tests {
 
     #[tokio::test]
     async fn tripwire_off_by_default_no_abstain() {
-        let (orch, _, _) = orchestrator_with_mocks();
+        // Day 17 audit m3 hardening: assert classifier WAS called so a
+        // regression that early-returns before the classifier wouldn't
+        // pass this test silently.
+        let (orch, classifier_arc, _) = orchestrator_with_mocks();
         let ctx = Context::single_user_local();
-        // Default policy is off — even an "obviously bad" version passes through.
         let out = orch
             .process_event(&ctx, &user_turn_event_with_host_version(&ctx.session_id, "0.0.0"))
             .await;
-        // Mock classifier abstains (empty queue) — verifies tripwire didn't fire its own abstain.
         assert!(out.abstentions.iter().all(|(_, r)| !matches!(r, AbstainReason::UntestedHostVersion)));
+        assert_eq!(
+            classifier_arc.call_count(),
+            1,
+            "tripwire-off must NOT short-circuit before the classifier"
+        );
     }
 
     #[tokio::test]

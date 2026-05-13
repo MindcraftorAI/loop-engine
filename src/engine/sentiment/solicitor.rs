@@ -99,6 +99,13 @@ pub async fn solicit_stale_lessons(
 
     let mut output = SolicitorOutput::default();
 
+    // Day 17 audit M1: respect `max_candidates_per_call = 0` (boundary).
+    if config.max_candidates_per_call == 0 {
+        // Caller wants no candidates — short-circuit. Still count what
+        // we'd have scanned (none) and skipped (none).
+        return Ok(output);
+    }
+
     for key in keys {
         output.scanned_count += 1;
 
@@ -320,6 +327,31 @@ mod tests {
             solicit_stale_lessons(&ctx, &storage, &config, now).await.unwrap();
         assert_eq!(out.stale_candidates.len(), 3);
         assert!(out.scanned_count >= 3);
+    }
+
+    /// Day 17 audit M1 regression: `max_candidates_per_call = 0` returns
+    /// zero candidates, not one.
+    #[tokio::test]
+    async fn max_candidates_zero_returns_no_candidates() {
+        let storage = MemoryStorage::default();
+        let ctx = Context::single_user_local();
+        let now = Utc::now();
+        let created = (now - chrono::Duration::days(60)).to_rfc3339();
+        seed(
+            &storage,
+            &ctx,
+            "les-would-be-stale",
+            &lesson_yaml("les-would-be-stale", &created, &[]),
+        )
+        .await;
+        let config = SolicitorConfig {
+            max_candidates_per_call: 0,
+            ..SolicitorConfig::default()
+        };
+        let out = solicit_stale_lessons(&ctx, &storage, &config, now)
+            .await
+            .unwrap();
+        assert!(out.stale_candidates.is_empty(), "expected zero candidates");
     }
 
     #[tokio::test]
