@@ -8,7 +8,12 @@ use std::path::PathBuf;
 use chrono::{DateTime, Utc};
 
 /// A normalized event emitted by the JSONL watcher.
+///
+/// Audit Day 14 M5: `#[non_exhaustive]` so adding variants
+/// (e.g. `SidechainSpawned` later) is not a breaking change. Host-side
+/// types are nominally unstable (learn-notes D6) but free insurance.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum WatcherEvent {
     /// A real user-typed turn appended to a session transcript. Filtered
     /// to exclude tool_result content, meta events, sidechain (Task-spawned

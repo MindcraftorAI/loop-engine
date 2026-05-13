@@ -22,7 +22,11 @@ use serde_json::Value;
 use super::events::WatcherEvent;
 
 /// Result of parsing a single JSONL line.
+///
+/// Audit Day 14 M5: `#[non_exhaustive]` so adding outcomes (e.g.
+/// `Skip(SkipReason::FutureCase)` consumers see) is non-breaking.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ParseOutcome {
     /// A relevant WatcherEvent was extracted.
     Event(WatcherEvent),
@@ -33,7 +37,10 @@ pub enum ParseOutcome {
     Error(String),
 }
 
+/// Audit Day 14 M5: `#[non_exhaustive]` so adding skip reasons (e.g.
+/// `SidechainAuditPolicy`) is non-breaking.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SkipReason {
     /// type field is not "user" (assistant turn, system, etc.).
     NotUserType,

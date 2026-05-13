@@ -6,10 +6,26 @@
 //! (Claude Code JSONL, MCP RPC, HTTP webhooks) into [`EngineEvent`]
 //! variants.
 //!
-//! **Phase 3b status:** trait + types defined. The first impl
-//! (`JsonlWatcher::EventSource`) lands in Phase 3c alongside the Day 13
-//! audit fixes A1-A5. Engine consumers (orchestrator etc.) consume
-//! these starting Day 15.
+//! **Day 14 status (audit-closed):** trait + types defined. No impl
+//! ships yet; this is documented decision-deferral (see
+//! `docs/research/day-14-post-research.md`).
+//!
+//! Why deferred: [`EngineEvent::UserTurn`] currently carries the host-
+//! agnostic minimum (`session_id`, `event_uuid`, `text`, `timestamp`,
+//! `cwd`). The Claude Code adapter's existing `WatcherEvent::UserTurn`
+//! also carries `parent_uuid`, `cc_version`, `git_branch` — fields the
+//! Day 15 orchestrator will need (correction-window mining wants
+//! parent_uuid; daemon-version tripwire wants cc_version; project
+//! routing may want git_branch). Picking the right shape (flat fields
+//! vs. opaque `HostExtras` sub-struct vs. host-specific event variant)
+//! requires the orchestrator's consumption requirements as input —
+//! deciding without them violates the "no guesswork" rule
+//! ([[feedback-rust-idiomatic-refactor]]).
+//!
+//! Day 15 plan: pre-research nails down `EngineEvent::UserTurn`'s final
+//! shape; build phase refactors `JsonlWatcher` to impl `EventSource`
+//! returning the curated `EngineEvent` AND ships the consuming
+//! orchestrator on top.
 
 use std::path::PathBuf;
 

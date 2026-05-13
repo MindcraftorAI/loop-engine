@@ -240,7 +240,7 @@ fn process_cursor(
     // outpaces us; 64 * 1MB = 64MB per FSEvent is generous for a
     // line-oriented append-only transcript.
     const MAX_ITER: u32 = 64;
-    for _ in 0..MAX_ITER {
+    for iteration in 0..MAX_ITER {
         let action = cursor.classify()?;
         let (from, count) = match action {
             CursorAction::NoChange => return Ok(()),
@@ -267,6 +267,17 @@ fn process_cursor(
         // If we didn't hit the read cap, the file is caught up for now.
         if count < MAX_APPEND_READ {
             return Ok(());
+        }
+        // Audit Day 14 M4 fix: warn if MAX_ITER bound is approached so an
+        // operator notices pathological inputs (e.g. a single line >1MB
+        // with no terminating `\n` that re-reads the same MAX_APPEND_READ
+        // every iteration without advancing the offset).
+        if iteration + 1 == MAX_ITER {
+            warn!(
+                path = %cursor.path.display(),
+                offset = cursor.offset,
+                "watcher: process_cursor hit MAX_ITER cap; file may have an oversized partial line"
+            );
         }
     }
     Ok(())

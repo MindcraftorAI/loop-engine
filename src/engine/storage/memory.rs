@@ -27,10 +27,6 @@ pub struct MemoryStorage {
 }
 
 impl MemoryStorage {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     fn mint_version(&self) -> Version {
         let n = self.next_version.fetch_add(1, Ordering::Relaxed);
         Version::from_bytes(n.to_be_bytes().to_vec())
@@ -111,7 +107,7 @@ mod tests {
 
     #[tokio::test]
     async fn round_trip() {
-        let s = MemoryStorage::new();
+        let s = MemoryStorage::default();
         let k = key("a");
         s.put(&k, Bytes::from_static(b"hello")).await.unwrap();
         assert_eq!(s.get(&k).await.unwrap().unwrap().as_ref(), b"hello");
@@ -119,7 +115,7 @@ mod tests {
 
     #[tokio::test]
     async fn delete_then_get_returns_none() {
-        let s = MemoryStorage::new();
+        let s = MemoryStorage::default();
         let k = key("a");
         s.put(&k, Bytes::from_static(b"x")).await.unwrap();
         s.delete(&k).await.unwrap();
@@ -128,7 +124,7 @@ mod tests {
 
     #[tokio::test]
     async fn list_returns_keys_under_prefix() {
-        let s = MemoryStorage::new();
+        let s = MemoryStorage::default();
         let ctx = Context::single_user_local();
         s.put(
             &StorageKey::lesson(&ctx, "active", "a"),
@@ -166,7 +162,7 @@ mod tests {
 
     #[tokio::test]
     async fn put_if_version_create_only_succeeds_on_absent() {
-        let s = MemoryStorage::new();
+        let s = MemoryStorage::default();
         let k = key("a");
         let ok = s
             .put_if_version(&k, Bytes::from_static(b"first"), None)
@@ -185,7 +181,7 @@ mod tests {
 
     #[tokio::test]
     async fn put_if_version_rmw_round_trip() {
-        let s = MemoryStorage::new();
+        let s = MemoryStorage::default();
         let k = key("a");
         s.put(&k, Bytes::from_static(b"v1")).await.unwrap();
         let (_bytes, v1) = s.get_with_version(&k).await.unwrap().unwrap();

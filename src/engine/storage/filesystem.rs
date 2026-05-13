@@ -85,20 +85,40 @@ impl Storage for LocalFsStorage {
     }
 
     async fn list(&self, prefix: &StorageKey) -> Result<Vec<StorageKey>, StorageError> {
-        let dir = self.resolve(prefix);
+        // Audit Day 14 C2+C3 fix: must match `MemoryStorage::list` semantics —
+        // RECURSIVE walk, FILES ONLY (no directories). The trait contract is
+        // "all keys under the prefix"; keys are file-addressable blobs, so
+        // sub-directories are not keys.
+        //
+        // Implementation: manual queue-based walk; no external dep needed for
+        // the few-thousand-file scale we operate at (a single user's lessons
+        // dir has hundreds of files at most).
         let mut out = Vec::new();
-        let mut entries = match tokio::fs::read_dir(&dir).await {
-            Ok(e) => e,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(out),
-            Err(e) => return Err(StorageError::backend(e)),
-        };
-        while let Some(entry) = entries.next_entry().await.map_err(StorageError::backend)? {
-            let entry_path = entry.path();
-            let relative = entry_path
-                .strip_prefix(&self.root)
-                .map_err(|e| StorageError::backend(io_err(e.to_string())))?;
-            let key_str = path_to_key_string(relative);
-            out.push(StorageKey::from_raw(key_str));
+        let mut stack: Vec<std::path::PathBuf> = vec![self.resolve(prefix)];
+
+        while let Some(dir) = stack.pop() {
+            let mut entries = match tokio::fs::read_dir(&dir).await {
+                Ok(e) => e,
+                Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(StorageError::backend(e)),
+            };
+            while let Some(entry) = entries.next_entry().await.map_err(StorageError::backend)? {
+                let file_type = entry.file_type().await.map_err(StorageError::backend)?;
+                let entry_path = entry.path();
+                if file_type.is_dir() {
+                    stack.push(entry_path);
+                    continue;
+                }
+                if !file_type.is_file() {
+                    // symlinks, fifos, etc. — skip silently
+                    continue;
+                }
+                let relative = entry_path
+                    .strip_prefix(&self.root)
+                    .map_err(|e| StorageError::backend(io_err(e.to_string())))?;
+                let key_str = path_to_key_string(relative);
+                out.push(StorageKey::from_raw(key_str));
+            }
         }
         Ok(out)
     }
@@ -222,6 +242,89 @@ mod tests {
             })
             .collect();
         assert!(tmps.is_empty(), "expected no leftover .tmp file");
+    }
+
+    #[tokio::test]
+    async fn list_is_recursive_and_filters_to_files() {
+        // Audit C2+C3 regression test: backend semantics must match
+        // MemoryStorage — recursive walk + files only (no directories).
+        let dir = TempDir::new().unwrap();
+        let storage = LocalFsStorage::new(dir.path());
+        let ctx = Context::single_user_local();
+
+        // Three lessons under two status dirs (sub-directories).
+        for (status, id) in [
+            ("active", "a"),
+            ("active", "b"),
+            ("archived", "c"),
+        ] {
+            storage
+                .put(&StorageKey::lesson(&ctx, status, id), Bytes::from_static(b"x"))
+                .await
+                .unwrap();
+        }
+
+        let prefix = StorageKey::from_raw("lessons".into());
+        let mut keys: Vec<String> = storage
+            .list(&prefix)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|k| k.as_str().to_string())
+            .collect();
+        keys.sort();
+        // All three lesson FILES surface; no directory entries.
+        assert_eq!(
+            keys,
+            vec![
+                "lessons/active/a.md",
+                "lessons/active/b.md",
+                "lessons/archived/c.md",
+            ],
+            "expected recursive walk returning only files, got {:?}",
+            keys
+        );
+    }
+
+    #[tokio::test]
+    async fn list_matches_memory_storage_semantics() {
+        // Same expected output from both backends for the same put sequence.
+        let dir = TempDir::new().unwrap();
+        let fs_storage = LocalFsStorage::new(dir.path());
+        let mem_storage = super::super::MemoryStorage::default();
+        let ctx = Context::single_user_local();
+
+        for (status, id) in [
+            ("active", "a"),
+            ("active", "b"),
+            ("archived", "c"),
+        ] {
+            let key = StorageKey::lesson(&ctx, status, id);
+            fs_storage.put(&key, Bytes::from_static(b"x")).await.unwrap();
+            mem_storage
+                .put(&key, Bytes::from_static(b"x"))
+                .await
+                .unwrap();
+        }
+
+        let prefix = StorageKey::from_raw("lessons".into());
+        let mut fs_keys: Vec<String> = fs_storage
+            .list(&prefix)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|k| k.as_str().to_string())
+            .collect();
+        let mut mem_keys: Vec<String> = mem_storage
+            .list(&prefix)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|k| k.as_str().to_string())
+            .collect();
+        fs_keys.sort();
+        mem_keys.sort();
+        assert_eq!(fs_keys, mem_keys);
     }
 
     #[tokio::test]
