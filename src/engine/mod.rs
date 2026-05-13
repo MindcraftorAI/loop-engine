@@ -16,6 +16,7 @@ pub mod error;
 pub mod events;
 pub mod lessons;
 pub mod lifecycle;
+pub mod manifest;
 pub mod paths;
 pub mod pid;
 pub mod sentiment;
@@ -29,6 +30,7 @@ pub use error::EngineError;
 // Curated re-exports (engine prelude).
 pub use context::{Context, ContextBuilder, SessionId, TeamId, TenantId, UserId};
 pub use events::{EngineEvent, EventSource, EventSourceError, HostVersion, ProjectTag};
+pub use manifest::{assemble, ActiveLesson, AssembleConfig, AssemblyStats, Manifest};
 pub use storage::{
     LocalFsStorage, MemoryStorage, Storage, StorageError, StorageKey, StorageMetadata, Version,
 };

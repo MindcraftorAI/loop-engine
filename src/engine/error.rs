@@ -48,6 +48,13 @@ pub enum EngineError {
     #[error("io error: {0}")]
     Io(#[source] io::Error),
 
+    /// Manifest assembly received an invalid status filter — either
+    /// an empty `statuses: vec![]` (Phase C-C1) or a string that
+    /// doesn't parse to a known [`crate::engine::yaml::LessonStatus`].
+    /// Caller-side validation error.
+    #[error("manifest invalid status: {status}")]
+    ManifestInvalidStatus { status: String },
+
     /// Promotion gate blocked the requested promotion. Added preemptively
     /// in Phase B C-B2 so Phase G `transitions::promote` has a typed
     /// failure to raise. The gate itself returns a `GateDecision` rather
