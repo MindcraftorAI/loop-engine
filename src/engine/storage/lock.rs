@@ -133,4 +133,57 @@ mod tests {
         with_sidecar_lock(&target, || Ok(())).unwrap();
         assert!(sidecar_lock_path(&target).unwrap().exists());
     }
+
+    /// Audit Day 16b M1 — port of Day 12 audit-#1 regression test from
+    /// `lessons/lock.rs:158-202`. Load-bearing for the CAS path because
+    /// `atomic_write_sync` does `rename` INSIDE the lock's critical
+    /// section — if the sidecar lock was attached to the target's inode
+    /// instead of the sidecar's, a second caller would race in.
+    #[test]
+    fn lock_survives_target_rename() {
+        let dir = TempDir::new().unwrap();
+        let target = dir.path().join("target.md");
+        std::fs::write(&target, "initial").unwrap();
+
+        let serial = Arc::new(AtomicUsize::new(0));
+        let max_concurrent = Arc::new(AtomicUsize::new(0));
+        let inside = Arc::new(AtomicUsize::new(0));
+
+        let handles: Vec<_> = (0..4)
+            .map(|i| {
+                let target = target.clone();
+                let serial = serial.clone();
+                let max_concurrent = max_concurrent.clone();
+                let inside = inside.clone();
+                thread::spawn(move || {
+                    with_sidecar_lock(&target, || {
+                        let now = inside.fetch_add(1, Ordering::SeqCst) + 1;
+                        max_concurrent.fetch_max(now, Ordering::SeqCst);
+
+                        // Rename-in-critical-section: this is the exact
+                        // path put_if_version's atomic_write_sync takes.
+                        let tmp = target.with_extension(format!("md.tmp.{i}"));
+                        std::fs::write(&tmp, format!("from-thread-{i}")).unwrap();
+                        std::fs::rename(&tmp, &target).unwrap();
+
+                        thread::sleep(Duration::from_millis(10));
+                        inside.fetch_sub(1, Ordering::SeqCst);
+                        serial.fetch_add(1, Ordering::SeqCst);
+                        Ok(())
+                    })
+                    .unwrap();
+                })
+            })
+            .collect();
+
+        for h in handles {
+            h.join().unwrap();
+        }
+        assert_eq!(serial.load(Ordering::SeqCst), 4);
+        assert_eq!(
+            max_concurrent.load(Ordering::SeqCst),
+            1,
+            "sidecar lock failed to serialize across rename-in-critical-section"
+        );
+    }
 }

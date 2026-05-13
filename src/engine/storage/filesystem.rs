@@ -202,10 +202,13 @@ fn read_version_sync(path: &Path) -> Result<Option<Version>, StorageError> {
     }
 }
 
+/// Audit Day 16b M2: `cfg(unix)`-gate the Unix-specific mtime path.
+/// Other platforms fall back to a `SystemTime`-derived version that's
+/// also 24 bytes (nanoseconds-since-UNIX-EPOCH || len).
+#[cfg(unix)]
 fn compute_version_sync(path: &Path) -> Result<Version, StorageError> {
     use std::os::unix::fs::MetadataExt;
     let meta = std::fs::metadata(path).map_err(StorageError::backend)?;
-    // mtime_ns: SystemTime → nanoseconds since UNIX_EPOCH as i128.
     let mtime_secs = meta.mtime();
     let mtime_nsec = meta.mtime_nsec();
     let mtime_ns: i128 = (mtime_secs as i128) * 1_000_000_000 + (mtime_nsec as i128);
@@ -216,15 +219,36 @@ fn compute_version_sync(path: &Path) -> Result<Version, StorageError> {
     Ok(Version::from_bytes(bytes.to_vec()))
 }
 
+#[cfg(not(unix))]
+fn compute_version_sync(path: &Path) -> Result<Version, StorageError> {
+    use std::time::UNIX_EPOCH;
+    let meta = std::fs::metadata(path).map_err(StorageError::backend)?;
+    let mtime = meta.modified().map_err(StorageError::backend)?;
+    let dur = mtime.duration_since(UNIX_EPOCH).unwrap_or_default();
+    let mtime_ns: i128 = (dur.as_secs() as i128) * 1_000_000_000 + (dur.subsec_nanos() as i128);
+    let len = meta.len();
+    let mut bytes = [0u8; 24];
+    bytes[..16].copy_from_slice(&mtime_ns.to_le_bytes());
+    bytes[16..24].copy_from_slice(&len.to_le_bytes());
+    Ok(Version::from_bytes(bytes.to_vec()))
+}
+
 /// Write `bytes` to `path` via temp-file + atomic rename. Caller must
 /// hold the sidecar lock already.
+///
+/// Audit Day 16b minor: if `rename` fails, clean up the tmp file so we
+/// don't leave orphans accumulating in the directory.
 fn atomic_write_sync(path: &Path, bytes: &Bytes) -> Result<(), StorageError> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(StorageError::backend)?;
     }
     let tmp = path.with_extension(temp_extension(path));
     std::fs::write(&tmp, bytes).map_err(StorageError::backend)?;
-    std::fs::rename(&tmp, path).map_err(StorageError::backend)?;
+    if let Err(e) = std::fs::rename(&tmp, path) {
+        // Best-effort cleanup; ignore secondary error.
+        let _ = std::fs::remove_file(&tmp);
+        return Err(StorageError::backend(e));
+    }
     Ok(())
 }
 
