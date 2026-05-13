@@ -17,10 +17,11 @@ pub mod lessons;
 pub mod lifecycle;
 pub mod paths;
 pub mod pid;
+pub mod sentiment;
 pub mod storage;
 pub mod yaml;
 
 // Curated re-exports (engine prelude).
 pub use context::{Context, ContextBuilder, SessionId, TeamId, TenantId, UserId};
-pub use events::{EngineEvent, EventSource, EventSourceError};
+pub use events::{EngineEvent, EventSource, EventSourceError, HostVersion, ProjectTag};
 pub use storage::{LocalFsStorage, MemoryStorage, Storage, StorageError, StorageKey, Version};

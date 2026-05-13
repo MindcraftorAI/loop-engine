@@ -79,6 +79,16 @@ bytes = "1"
 # `BoxStream` type alias used by `EventSource`. MIT/Apache.
 futures = { version = "0.3", default-features = false, features = ["std", "async-await"] }
 
+# Sentiment pretrigger pattern. Promoted to direct dep Day 15 (was
+# already transitive via `tracing-subscriber`). MIT/Apache.
+regex = "1"
+
+[features]
+# Test fixtures: ships `MockSentimentClassifier` for cross-crate test
+# code (integration tests, future external consumers). Production
+# builds compile without it. Locked in Day 15 learn-notes D13.
+test-fixtures = []
+
 [dev-dependencies]
 tokio = { version = "1", features = ["test-util"] }
 tempfile = "3"
