@@ -23,7 +23,7 @@ pub mod signals;
 
 // Canonical async API (Phase A C4 + C5):
 pub use loader::{get_by_id, LessonFullContent, LoadedLesson};
-pub use signals::{record_signal, SignalPolarity};
+pub use signals::{record_applied, record_signal, SignalPolarity};
 
 // Phase B C-B2 — promotion gate (the marketing wedge):
 pub use gate::{check_promotion_gate, BlockReason, GateDecision, PassReason, PromotionConfig};

@@ -191,6 +191,84 @@ pub async fn record_signal(
     })
 }
 
+/// Phase C C-C3: bounded retry budget for `record_applied`. Same
+/// rationale as `RECORD_SIGNAL_MAX_RETRIES` — 5 retries absorbs realistic
+/// cross-process contention; exhaustion surfaces as `CasContended`.
+const RECORD_APPLIED_MAX_RETRIES: u32 = 5;
+
+/// Phase C C-C3: increment `applied_count` and stamp `last_applied_at`
+/// on a lesson — recorded every time the lesson surfaces in a manifest.
+/// Same CAS-RMW pattern as [`record_signal`]: re-read on every iteration,
+/// no locks across `.await`, bounded 5-retry budget.
+///
+/// Concurrency note: TS uses `Promise.all` over per-lesson
+/// `recordLessonApplied` calls; without CAS, two concurrent assemblies
+/// can race and lose an increment (both READ count=N, both WRITE
+/// count=N+1). The Rust port via `put_if_version` correctly accumulates
+/// — strictly better than TS for parallel-assembly workloads (per
+/// pre-research OQ-C3).
+///
+/// Errors:
+/// - `EngineError::LessonNotFound { id }` if the lesson is absent at
+///   any point during the CAS loop (deleted or status-moved between
+///   iterations).
+/// - `EngineError::CasContended { key, retries }` on retry-budget
+///   exhaustion.
+/// - `EngineError::Storage(_)/Parse(_)/Yaml(_)` on read/parse failures.
+pub async fn record_applied(
+    ctx: &Context,
+    storage: &dyn Storage,
+    id: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<LoadedLesson, EngineError> {
+    let initial = get_by_id(ctx, storage, id)
+        .await?
+        .ok_or_else(|| EngineError::LessonNotFound { id: id.to_string() })?;
+    let status_dir = initial.status_dir.clone();
+    let key = StorageKey::lesson(ctx, &status_dir, id);
+
+    for _attempt in 0..RECORD_APPLIED_MAX_RETRIES {
+        let Some((bytes, version)) = storage.get_with_version(&key).await? else {
+            return Err(EngineError::LessonNotFound { id: id.to_string() });
+        };
+        let content = std::str::from_utf8(&bytes)
+            .map_err(|e| EngineError::Parse(format!("non-utf8 lesson bytes for {key}: {e}")))?;
+        let split = split_frontmatter_normalized(content)
+            .map_err(|e| EngineError::Parse(format!("split frontmatter {key}: {e}")))?;
+        let mut frontmatter = parse_lesson_frontmatter(&split.yaml)
+            .map_err(|e| EngineError::Yaml(e.into()))?;
+
+        // The mutation: bump the counter, stamp the timestamp.
+        frontmatter.applied_count = frontmatter.applied_count.saturating_add(1);
+        frontmatter.last_applied_at =
+            Some(now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
+        // updated_at also bumps — matches TS-side `recordLessonApplied`.
+        frontmatter.updated_at =
+            Some(now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
+
+        let new_yaml = serialize_lesson_frontmatter(&frontmatter);
+        let normalized_body = split.body.trim_start_matches('\n');
+        let new_contents = combine_frontmatter(&new_yaml, normalized_body);
+
+        let written = storage
+            .put_if_version(&key, Bytes::from(new_contents), Some(&version))
+            .await?;
+        if written {
+            return Ok(LoadedLesson {
+                path: PathBuf::from(key.as_str()),
+                status_dir,
+                frontmatter,
+                body: normalized_body.to_string(),
+            });
+        }
+    }
+
+    Err(EngineError::CasContended {
+        key: key.as_str().to_string(),
+        retries: RECORD_APPLIED_MAX_RETRIES,
+    })
+}
+
 fn load_locked(path: &Path, status_dir: &str) -> Result<LoadedLesson> {
     let source = fs::read_to_string(path)
         .with_context(|| format!("reading lesson at {}", path.display()))?;

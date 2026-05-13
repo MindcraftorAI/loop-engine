@@ -24,7 +24,9 @@ use tracing::warn;
 
 use crate::engine::context::Context;
 use crate::engine::error::EngineError;
-use crate::engine::lessons::{GateDecision, PromotionConfig};
+use crate::engine::lessons::{
+    check_promotion_gate, record_applied, GateDecision, PromotionConfig,
+};
 use crate::engine::storage::{Storage, StorageKey};
 use crate::engine::yaml::{
     reader::parse_lesson_frontmatter, split_frontmatter_normalized, LessonFrontmatter,
@@ -205,10 +207,82 @@ pub async fn assemble(
         collected.truncate(config.lesson_limit);
     }
 
+    // 4. Per-lesson gate annotation (the wedge surfaces here).
+    //    `Storage::metadata()` failure → `gate: None` + skip count;
+    //    a successful metadata read feeds `check_promotion_gate`.
+    if config.annotate_with_gate {
+        for lesson in collected.iter_mut() {
+            let key = StorageKey::lesson(ctx, lesson.status.as_str(), &lesson.id);
+            // Reload the frontmatter for the gate input (cheap — single
+            // get + parse). We can't use the trimmed `ActiveLesson`
+            // shape because the gate needs `LessonFrontmatter`.
+            // Soft-fail per D-C8.
+            match load_frontmatter_for_gate(storage, &key).await {
+                Ok(Some((fm, metadata))) => {
+                    lesson.gate = Some(check_promotion_gate(
+                        &fm,
+                        &metadata,
+                        &config.promotion_config,
+                        now,
+                    ));
+                }
+                _ => {
+                    stats.gate_skip_count += 1;
+                }
+            }
+        }
+    }
+
+    // 5. `record_applied` side-effect (TS-parity, opt-out via
+    //    `record_applied: false`). Failures are swallowed per D-C8.
+    if config.record_applied {
+        for lesson in collected.iter() {
+            if let Err(e) = record_applied(ctx, storage, &lesson.id, now).await {
+                warn!(
+                    id = %lesson.id,
+                    error = %e,
+                    "manifest: record_applied failed; counter not incremented"
+                );
+                stats.record_applied_failures += 1;
+            }
+        }
+    }
+
     Ok(Manifest {
         active_lessons: collected,
         assembly_stats: stats,
     })
+}
+
+/// Re-load (frontmatter, metadata) for the gate input. The trimmed
+/// `ActiveLesson` shape doesn't retain the full `LessonFrontmatter`,
+/// so we go back to storage for the gate annotation pass. Returns
+/// `Ok(None)` if the key vanished between listing and gate-load (race).
+async fn load_frontmatter_for_gate(
+    storage: &dyn Storage,
+    key: &StorageKey,
+) -> Result<
+    Option<(
+        crate::engine::yaml::LessonFrontmatter,
+        crate::engine::storage::StorageMetadata,
+    )>,
+    EngineError,
+> {
+    let bytes = match storage.get(key).await? {
+        Some(b) => b,
+        None => return Ok(None),
+    };
+    let metadata = match storage.metadata(key).await? {
+        Some(m) => m,
+        None => return Ok(None),
+    };
+    let content = std::str::from_utf8(&bytes)
+        .map_err(|e| EngineError::Parse(format!("non-utf8 lesson bytes for {key}: {e}")))?;
+    let split = split_frontmatter_normalized(content)
+        .map_err(|e| EngineError::Parse(format!("split frontmatter {key}: {e}")))?;
+    let fm = parse_lesson_frontmatter(&split.yaml)
+        .map_err(|e| EngineError::Yaml(e.into()))?;
+    Ok(Some((fm, metadata)))
 }
 
 /// Sort-key tuple for the three-key deterministic order. Aliased
@@ -640,5 +714,138 @@ mod tests {
         .unwrap();
         assert_eq!(m.active_lessons.len(), 2);
         assert!(m.active_lessons.iter().any(|l| l.id == "les-ondisk01"));
+    }
+
+    // -----------------------------------------------------------------
+    // C-C3: gate annotation + record_applied + wedge integration
+    // -----------------------------------------------------------------
+
+    #[tokio::test]
+    async fn assemble_attaches_gate_decision_when_annotate_with_gate_true() {
+        let h = TestHarness::in_memory();
+        h.seed_lesson("active", "les-gate0001", "body").await.unwrap();
+        let m = assemble(
+            &h.ctx,
+            h.storage.as_ref(),
+            &AssembleConfig::default(), // annotate_with_gate = true
+            now_t(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(m.active_lessons.len(), 1);
+        assert!(
+            m.active_lessons[0].gate.is_some(),
+            "expected gate annotation present, got None"
+        );
+    }
+
+    #[tokio::test]
+    async fn assemble_skips_gate_when_annotate_with_gate_false() {
+        let h = TestHarness::in_memory();
+        h.seed_lesson("active", "les-noggate01", "body").await.unwrap();
+        let config = AssembleConfig {
+            annotate_with_gate: false,
+            ..AssembleConfig::default()
+        };
+        let m = assemble(&h.ctx, h.storage.as_ref(), &config, now_t())
+            .await
+            .unwrap();
+        assert_eq!(m.active_lessons.len(), 1);
+        assert!(m.active_lessons[0].gate.is_none());
+        assert_eq!(m.assembly_stats.gate_skip_count, 0);
+    }
+
+    #[tokio::test]
+    async fn assemble_record_applied_increments_counter_by_default() {
+        use crate::engine::lessons::get_by_id;
+        let h = TestHarness::in_memory();
+        h.seed_lesson("active", "les-counter1", "body").await.unwrap();
+        // applied_count starts at 0 (TestHarness default).
+        let m = assemble(
+            &h.ctx,
+            h.storage.as_ref(),
+            &AssembleConfig::default(),
+            now_t(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(m.active_lessons.len(), 1);
+        assert_eq!(m.assembly_stats.record_applied_failures, 0);
+        // Verify the on-disk increment via a follow-up read.
+        let after = get_by_id(&h.ctx, h.storage.as_ref(), "les-counter1")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(after.frontmatter.applied_count, 1);
+        assert!(after.frontmatter.last_applied_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn assemble_record_applied_skipped_when_record_applied_false() {
+        use crate::engine::lessons::get_by_id;
+        let h = TestHarness::in_memory();
+        h.seed_lesson("active", "les-noinc001", "body").await.unwrap();
+        let config = AssembleConfig {
+            record_applied: false,
+            ..AssembleConfig::default()
+        };
+        let _ = assemble(&h.ctx, h.storage.as_ref(), &config, now_t())
+            .await
+            .unwrap();
+        let after = get_by_id(&h.ctx, h.storage.as_ref(), "les-noinc001")
+            .await
+            .unwrap()
+            .unwrap();
+        // applied_count stays at 0 — strictly read-only manifest assembly.
+        assert_eq!(after.frontmatter.applied_count, 0);
+        assert!(after.frontmatter.last_applied_at.is_none());
+    }
+
+    #[tokio::test]
+    async fn wedge_at_manifest_layer_backdated_lesson_surfaces_blocked_gate() {
+        // The marketing-wedge regression at the MANIFEST layer (one
+        // step above the gate's own s21 regression in lessons/gate.rs).
+        // A lesson backdated in YAML but freshly written to in-memory
+        // storage must show up in `manifest.active_lessons[0].gate`
+        // as `Block { reasons: [TamperedAge, ...] }` — proving the
+        // wedge claim flows end-to-end through manifest assembly.
+        let h = TestHarness::in_memory();
+        h.seed_lesson_with_created_at(
+            "active",
+            "les-wedge002",
+            "body",
+            "2026-04-13T00:00:00Z", // 30 days before now_t()
+        )
+        .await
+        .unwrap();
+
+        let m = assemble(
+            &h.ctx,
+            h.storage.as_ref(),
+            &AssembleConfig::default(),
+            now_t(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(m.active_lessons.len(), 1);
+        let gate = m.active_lessons[0]
+            .gate
+            .as_ref()
+            .expect("wedge: expected gate annotation");
+        match gate {
+            GateDecision::Block { reasons } => {
+                assert!(
+                    reasons.iter().any(|r| matches!(
+                        r,
+                        crate::engine::lessons::BlockReason::TamperedAge { .. }
+                    )),
+                    "wedge invariant FAILED at manifest layer: TamperedAge missing. \
+                     Got reasons: {reasons:?}"
+                );
+            }
+            other => panic!(
+                "wedge: expected Block on backdated lesson, got {other:?}"
+            ),
+        }
     }
 }
