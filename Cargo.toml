@@ -1,0 +1,63 @@
+[package]
+name = "loop-daemon"
+version = "0.0.1"
+edition = "2021"
+rust-version = "1.85"
+description = "Live verification daemon for Loop — watches Claude Code sessions for sentiment signals and emits to the lesson layer"
+license = "MIT"
+repository = "https://github.com/RankLabsDev/loop-daemon"
+publish = false
+
+[[bin]]
+name = "loop-daemon"
+path = "src/main.rs"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "signal", "time", "fs"] }
+# CancellationToken — sticky shutdown primitive. Switched from
+# `tokio::sync::Notify` after Day 10 audit found a signal-before-waiter
+# race: if SIGTERM arrives before the heartbeat loop registers on
+# `notify_waiters`, the wake is lost and the daemon hangs. CancellationToken
+# is sticky — `is_cancelled()` survives ordering.
+tokio-util = { version = "0.7", default-features = false }
+
+# CLI / args
+clap = { version = "4", features = ["derive"] }
+
+# Error handling
+anyhow = "1"
+thiserror = "2"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+
+# Daemonization (fork + setsid + PID file)
+daemonize = "0.5"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+# serde_yml is the actively-maintained fork of the archived serde_yaml. Used
+# for ~/.loop/config.yaml only; lesson frontmatter uses our purpose-built
+# YAML reader (Day 11).
+serde_yml = "0.0.12"
+
+# Time
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde", "std"] }
+
+# Paths
+dirs = "6"
+
+# Unix primitives (PID probing, signals)
+libc = "0.2"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["test-util"] }
+tempfile = "3"
+
+[profile.release]
+strip = "symbols"
+lto = "thin"
+codegen-units = 1
+panic = "abort"
