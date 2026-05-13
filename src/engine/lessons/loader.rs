@@ -1,16 +1,27 @@
-//! Lesson loader — `get_lesson_by_id` and helpers.
+//! Lesson loader — `get_lesson_by_id` (sync, deprecated) and
+//! `get_by_id` (async, post-Phase-A canonical).
 //!
 //! Mirrors the TS-side `core/src/lessons/loader.ts::getLessonById`:
 //!   - Scans the 5 status directories in canonical order
 //!   - Returns the full lesson content + frontmatter when found
 //!   - Validates the lesson ID format up-front
+//!
+//! Phase A C4: introduces the new async `get_by_id(ctx, storage, id)`
+//! signature that consumes the `Storage` trait. The legacy
+//! `get_lesson_by_id(id)` stays as `#[deprecated]` for one cycle —
+//! existing callers retire in Phase F or G. Each path tested
+//! independently per the Phase A learn-notes scope-tightening
+//! (no runtime-detection sync-wraps-async shim).
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Context as _, Result};
 
+use crate::engine::context::Context;
+use crate::engine::error::EngineError;
 use crate::engine::paths;
+use crate::engine::storage::{Storage, StorageKey};
 use crate::engine::yaml::reader::parse_lesson_frontmatter;
 use crate::engine::yaml::{split_frontmatter_normalized, LessonFrontmatter};
 
@@ -37,8 +48,17 @@ pub fn is_valid_lesson_id(id: &str) -> bool {
         && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
 }
 
-/// Scan all status directories for a lesson with `id`. Returns None if
-/// not found. Errors only on I/O issues, not on missing.
+/// **DEPRECATED** — use [`get_by_id`] which takes `&Context + &dyn Storage`.
+///
+/// Scan all status directories via `paths::loop_home()` for a lesson with
+/// `id`. Returns None if not found OR invalid id. Errors only on I/O.
+/// Retained for one cycle while existing callers migrate; will be
+/// removed in Phase F or G.
+#[deprecated(
+    since = "0.0.1-phase-a",
+    note = "Use `get_by_id(ctx, storage, id)` which goes through the Storage trait. \
+            This sync wrapper retires in Phase F or G."
+)]
 pub fn get_lesson_by_id(id: &str) -> Result<Option<LoadedLesson>> {
     if !is_valid_lesson_id(id) {
         return Ok(None);
@@ -49,6 +69,55 @@ pub fn get_lesson_by_id(id: &str) -> Result<Option<LoadedLesson>> {
             continue;
         }
         return Ok(Some(load_lesson_file(&candidate, status)?));
+    }
+    Ok(None)
+}
+
+/// Phase A C4: Storage-trait-based async lesson lookup. Canonical
+/// going forward; the sync wrapper above retires in Phase F or G.
+///
+/// Returns `Ok(None)` on:
+/// - Invalid id format (TS-parity behavior)
+/// - Lesson not present in any status directory
+///
+/// Returns `Err(EngineError)` on:
+/// - `EngineError::Storage(_)` — backend I/O error
+/// - `EngineError::Parse(_)` — frontmatter split failure
+/// - `EngineError::Yaml(_)` — frontmatter YAML parse failure
+///
+/// The returned `LoadedLesson.path` is set to a synthetic PathBuf
+/// derived from the resolved StorageKey for diagnostic purposes —
+/// callers should NOT rely on it being a real filesystem path (it
+/// isn't, for in-memory backends).
+pub async fn get_by_id(
+    ctx: &Context,
+    storage: &dyn Storage,
+    id: &str,
+) -> Result<Option<LoadedLesson>, EngineError> {
+    if !is_valid_lesson_id(id) {
+        return Ok(None);
+    }
+    for status in paths::LESSON_STATUS_DIRS {
+        let key = StorageKey::lesson(ctx, status, id);
+        let Some(bytes) = storage.get(&key).await? else {
+            continue;
+        };
+        let content = std::str::from_utf8(&bytes).map_err(|e| {
+            EngineError::Parse(format!("non-utf8 lesson bytes for {key}: {e}"))
+        })?;
+        let split = split_frontmatter_normalized(content)
+            .map_err(|e| EngineError::Parse(format!("split frontmatter {key}: {e}")))?;
+        // anyhow::Error doesn't impl std::error::Error directly, but it
+        // does impl Into<Box<dyn Error + Send + Sync>> — use the variant
+        // constructor directly rather than the EngineError::yaml() helper.
+        let frontmatter = parse_lesson_frontmatter(&split.yaml)
+            .map_err(|e| EngineError::Yaml(e.into()))?;
+        return Ok(Some(LoadedLesson {
+            path: PathBuf::from(key.as_str()),
+            status_dir: (*status).to_string(),
+            frontmatter,
+            body: split.body,
+        }));
     }
     Ok(None)
 }
@@ -81,6 +150,13 @@ pub fn lesson_file_path(status: &str, id: &str) -> Result<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    // Sync-path tests use the legacy with_temp_loop_home + ENV_LOCK
+    // pattern — they exercise `get_lesson_by_id` which still walks
+    // `paths::loop_home()`. The new `get_by_id` async path has its own
+    // tests below using TestHarness (the ENV_LOCK-free pattern from
+    // Phase A C3).
+    #![allow(deprecated)]
+
     use super::*;
     use crate::engine::paths::ENV_LOCK;
     use crate::engine::yaml::{combine_frontmatter, writer::serialize_lesson_frontmatter, LessonStatus};
@@ -200,5 +276,128 @@ mod tests {
             assert!(result.is_err());
             Ok(())
         });
+    }
+
+    // =================================================================
+    // Phase A C4 — async `get_by_id` tests via TestHarness (no ENV_LOCK)
+    // =================================================================
+
+    use crate::engine::test_support::TestHarness;
+    use bytes::Bytes;
+
+    fn lesson_yaml(id: &str, status: &str) -> String {
+        format!(
+            "---\n\
+             id: {id}\n\
+             description: \"test\"\n\
+             status: {status}\n\
+             created_at: \"2026-05-13T00:00:00.000Z\"\n\
+             applied_count: 0\n\
+             thumbs_up_count: 0\n\
+             thumbs_down_count: 0\n\
+             external_signal_sources: []\n\
+             ---\n\
+             test body\n"
+        )
+    }
+
+    #[tokio::test]
+    async fn get_by_id_returns_none_for_invalid_id() {
+        let h = TestHarness::in_memory();
+        let result = get_by_id(&h.ctx, h.storage.as_ref(), "not-a-valid-id")
+            .await
+            .unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn get_by_id_returns_none_when_lesson_missing() {
+        let h = TestHarness::in_memory();
+        let result = get_by_id(&h.ctx, h.storage.as_ref(), "les-aaaaaaaa")
+            .await
+            .unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn get_by_id_finds_lesson_in_active_status() {
+        let h = TestHarness::in_memory();
+        let key = StorageKey::lesson(&h.ctx, "active", "les-zzzzzzzz");
+        h.storage
+            .put(&key, Bytes::from(lesson_yaml("les-zzzzzzzz", "active")))
+            .await
+            .unwrap();
+        let loaded = get_by_id(&h.ctx, h.storage.as_ref(), "les-zzzzzzzz")
+            .await
+            .unwrap()
+            .expect("should be found");
+        assert_eq!(loaded.status_dir, "active");
+        assert_eq!(loaded.frontmatter.id, "les-zzzzzzzz");
+        assert!(loaded.body.contains("test body"));
+    }
+
+    #[tokio::test]
+    async fn get_by_id_finds_lesson_in_each_status_dir() {
+        for status in paths::LESSON_STATUS_DIRS {
+            let h = TestHarness::in_memory();
+            let key = StorageKey::lesson(&h.ctx, status, "les-pertestx");
+            h.storage
+                .put(&key, Bytes::from(lesson_yaml("les-pertestx", status)))
+                .await
+                .unwrap();
+            let loaded = get_by_id(&h.ctx, h.storage.as_ref(), "les-pertestx")
+                .await
+                .unwrap()
+                .expect("should be found");
+            assert_eq!(&loaded.status_dir, status);
+        }
+    }
+
+    #[tokio::test]
+    async fn get_by_id_on_disk_storage_works_end_to_end() {
+        let h = TestHarness::on_disk();
+        let key = StorageKey::lesson(&h.ctx, "active", "les-ondisk1");
+        h.storage
+            .put(&key, Bytes::from(lesson_yaml("les-ondisk1", "active")))
+            .await
+            .unwrap();
+        let loaded = get_by_id(&h.ctx, h.storage.as_ref(), "les-ondisk1")
+            .await
+            .unwrap()
+            .expect("should be found");
+        assert_eq!(loaded.frontmatter.id, "les-ondisk1");
+    }
+
+    #[tokio::test]
+    async fn get_by_id_returns_parse_error_on_malformed_frontmatter() {
+        let h = TestHarness::in_memory();
+        let key = StorageKey::lesson(&h.ctx, "active", "les-broken1");
+        h.storage
+            .put(&key, Bytes::from_static(b"no frontmatter at all\n"))
+            .await
+            .unwrap();
+        let result = get_by_id(&h.ctx, h.storage.as_ref(), "les-broken1").await;
+        assert!(matches!(result, Err(EngineError::Parse(_))));
+    }
+
+    /// Harness-driven tests run in parallel — proves ENV_LOCK isn't needed
+    /// for the new async path (one of Phase A's design goals).
+    #[tokio::test]
+    async fn get_by_id_parallel_harnesses_dont_collide() {
+        let (h1, h2) = (TestHarness::in_memory(), TestHarness::in_memory());
+        let key1 = StorageKey::lesson(&h1.ctx, "active", "les-onlyinh1");
+        h1.storage
+            .put(&key1, Bytes::from(lesson_yaml("les-onlyinh1", "active")))
+            .await
+            .unwrap();
+        // h2 has no lessons — should return None for the same id.
+        assert!(get_by_id(&h2.ctx, h2.storage.as_ref(), "les-onlyinh1")
+            .await
+            .unwrap()
+            .is_none());
+        assert!(get_by_id(&h1.ctx, h1.storage.as_ref(), "les-onlyinh1")
+            .await
+            .unwrap()
+            .is_some());
     }
 }
