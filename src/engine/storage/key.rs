@@ -41,6 +41,14 @@ impl StorageKey {
         Self(prefixed(ctx, "daemon.log"))
     }
 
+    /// Sentiment signal file — per-(session, event) record. Day 16b
+    /// emits one file per emitted signal; Day 17+ aggregates these
+    /// into per-lesson signal arrays.
+    pub fn sentiment_signal(ctx: &Context, session_id: &str, event_uuid: &str) -> Self {
+        let suffix = format!("signals/{session_id}/{event_uuid}.yaml");
+        Self(prefixed(ctx, &suffix))
+    }
+
     /// Construct from a pre-validated path string. **Internal use only**
     /// — accessible to engine modules (e.g. `LocalFsStorage::list`
     /// constructing keys from directory entries). Not part of the

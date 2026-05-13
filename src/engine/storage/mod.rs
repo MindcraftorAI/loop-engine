@@ -17,6 +17,7 @@ use std::fmt::Debug;
 pub mod error;
 pub mod filesystem;
 pub mod key;
+pub(crate) mod lock;
 pub mod memory;
 pub mod version;
 

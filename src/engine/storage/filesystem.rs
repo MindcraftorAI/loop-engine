@@ -125,29 +125,107 @@ impl Storage for LocalFsStorage {
 
     async fn put_if_version(
         &self,
-        _key: &StorageKey,
-        _bytes: Bytes,
-        _expected_version: Option<&Version>,
+        key: &StorageKey,
+        bytes: Bytes,
+        expected_version: Option<&Version>,
     ) -> Result<bool, StorageError> {
-        // Phase 3c: implement via sidecar fd-lock + atomic rename, lifting
-        // the pattern from src/engine/lessons/lock.rs. Tracked as part of
-        // Day 14 Task #45 audit-fix follow-up; lessons-migration in
-        // Day 15+ consumes this.
-        Err(StorageError::backend(io_err(
-            "put_if_version not yet implemented for LocalFsStorage (Phase 3c)"
-                .to_string(),
-        )))
+        let path = self.resolve(key);
+        let expected = expected_version.cloned();
+        // Day 16b D1: sync work inside `spawn_blocking` because `fd_lock`
+        // is sync and the OS doesn't release flock on tokio suspend (S31).
+        tokio::task::spawn_blocking(move || put_if_version_sync(&path, &bytes, expected.as_ref()))
+            .await
+            .map_err(StorageError::backend)?
     }
 
     async fn get_with_version(
         &self,
-        _key: &StorageKey,
+        key: &StorageKey,
     ) -> Result<Option<(Bytes, Version)>, StorageError> {
-        Err(StorageError::backend(io_err(
-            "get_with_version not yet implemented for LocalFsStorage (Phase 3c)"
-                .to_string(),
-        )))
+        let path = self.resolve(key);
+        // Day 16b D1: same spawn_blocking discipline.
+        tokio::task::spawn_blocking(move || get_with_version_sync(&path))
+            .await
+            .map_err(StorageError::backend)?
     }
+}
+
+/// Sync impl: hold sidecar lock during read + stat + write so the
+/// `(bytes, version)` pair stays coherent (Day 16b D1 + S33 prevention).
+fn put_if_version_sync(
+    path: &Path,
+    bytes: &Bytes,
+    expected_version: Option<&Version>,
+) -> Result<bool, StorageError> {
+    crate::engine::storage::lock::with_sidecar_lock(path, || {
+        // Verify the expected_version under the lock.
+        let current = read_version_sync(path)?;
+        match (current.as_ref(), expected_version) {
+            (None, None) => {
+                // Create-only: no current version expected; write fresh.
+                atomic_write_sync(path, bytes)?;
+                Ok(true)
+            }
+            (Some(cur), Some(exp)) if cur == exp => {
+                // CAS match: write.
+                atomic_write_sync(path, bytes)?;
+                Ok(true)
+            }
+            _ => Ok(false), // version mismatch (or expected None but file exists)
+        }
+    })
+}
+
+/// Sync impl: hold sidecar lock during read+stat so a concurrent
+/// writer can't rotate the file between the two syscalls.
+fn get_with_version_sync(path: &Path) -> Result<Option<(Bytes, Version)>, StorageError> {
+    crate::engine::storage::lock::with_sidecar_lock(path, || match std::fs::read(path) {
+        Ok(data) => {
+            // Stat for the version AFTER read so any rotation between
+            // syscalls is impossible — we hold the sidecar lock through
+            // both. Mtime + len encode the version (Day 16b D2).
+            let version = compute_version_sync(path)?;
+            Ok(Some((Bytes::from(data), version)))
+        }
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(StorageError::backend(e)),
+    })
+}
+
+/// Read the on-disk version (`mtime_ns + len`, 24 bytes LE). Returns
+/// None if the file doesn't exist.
+fn read_version_sync(path: &Path) -> Result<Option<Version>, StorageError> {
+    match std::fs::metadata(path) {
+        Ok(_) => compute_version_sync(path).map(Some),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(StorageError::backend(e)),
+    }
+}
+
+fn compute_version_sync(path: &Path) -> Result<Version, StorageError> {
+    use std::os::unix::fs::MetadataExt;
+    let meta = std::fs::metadata(path).map_err(StorageError::backend)?;
+    // mtime_ns: SystemTime → nanoseconds since UNIX_EPOCH as i128.
+    let mtime_secs = meta.mtime();
+    let mtime_nsec = meta.mtime_nsec();
+    let mtime_ns: i128 = (mtime_secs as i128) * 1_000_000_000 + (mtime_nsec as i128);
+    let len = meta.len();
+    let mut bytes = [0u8; 24];
+    bytes[..16].copy_from_slice(&mtime_ns.to_le_bytes());
+    bytes[16..24].copy_from_slice(&len.to_le_bytes());
+    Ok(Version::from_bytes(bytes.to_vec()))
+}
+
+/// Write `bytes` to `path` via temp-file + atomic rename. Caller must
+/// hold the sidecar lock already.
+fn atomic_write_sync(path: &Path, bytes: &Bytes) -> Result<(), StorageError> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(StorageError::backend)?;
+    }
+    let tmp = path.with_extension(temp_extension(path));
+    std::fs::write(&tmp, bytes).map_err(StorageError::backend)?;
+    std::fs::rename(&tmp, path).map_err(StorageError::backend)?;
+    Ok(())
 }
 
 fn io_err(msg: String) -> io::Error {
@@ -327,17 +405,123 @@ mod tests {
         assert_eq!(fs_keys, mem_keys);
     }
 
+    // Day 14 stub-pin test `put_if_version_returns_backend_error_in_phase_3b`
+    // RETIRED in Day 16b — replaced by the regression tests below now that
+    // the impl is live.
+
+    // ---- put_if_version / get_with_version regression tests (Day 16b D1) ----
+
     #[tokio::test]
-    async fn put_if_version_returns_backend_error_in_phase_3b() {
-        // Phase 3c will implement; this test pins the current contract
-        // so we notice when the stub turns into a real implementation.
+    async fn cas_create_only_succeeds_on_absent_then_fails() {
         let dir = TempDir::new().unwrap();
         let storage = LocalFsStorage::new(dir.path());
         let ctx = Context::single_user_local();
-        let key = StorageKey::lesson(&ctx, "active", "x");
-        let result = storage
-            .put_if_version(&key, Bytes::from_static(b"x"), None)
-            .await;
-        assert!(matches!(result, Err(StorageError::Backend(_))));
+        let key = StorageKey::lesson(&ctx, "active", "les-cas1");
+
+        // Create-only: file absent → success.
+        let ok = storage
+            .put_if_version(&key, Bytes::from_static(b"first"), None)
+            .await
+            .unwrap();
+        assert!(ok);
+
+        // Create-only again: file now present → fail.
+        let ok = storage
+            .put_if_version(&key, Bytes::from_static(b"second"), None)
+            .await
+            .unwrap();
+        assert!(!ok);
+        // Original value preserved.
+        assert_eq!(storage.get(&key).await.unwrap().unwrap().as_ref(), b"first");
+    }
+
+    #[tokio::test]
+    async fn cas_rmw_round_trip() {
+        let dir = TempDir::new().unwrap();
+        let storage = LocalFsStorage::new(dir.path());
+        let ctx = Context::single_user_local();
+        let key = StorageKey::lesson(&ctx, "active", "les-cas2");
+
+        storage.put(&key, Bytes::from_static(b"v1")).await.unwrap();
+        let (_, v1) = storage.get_with_version(&key).await.unwrap().unwrap();
+
+        // CAS with the correct version succeeds.
+        let ok = storage
+            .put_if_version(&key, Bytes::from_static(b"v2"), Some(&v1))
+            .await
+            .unwrap();
+        assert!(ok);
+        assert_eq!(storage.get(&key).await.unwrap().unwrap().as_ref(), b"v2");
+
+        // CAS with the stale v1 fails; v2 stays.
+        let ok = storage
+            .put_if_version(&key, Bytes::from_static(b"v3"), Some(&v1))
+            .await
+            .unwrap();
+        assert!(!ok);
+        assert_eq!(storage.get(&key).await.unwrap().unwrap().as_ref(), b"v2");
+    }
+
+    #[tokio::test]
+    async fn get_with_version_returns_none_when_missing() {
+        let dir = TempDir::new().unwrap();
+        let storage = LocalFsStorage::new(dir.path());
+        let ctx = Context::single_user_local();
+        let key = StorageKey::lesson(&ctx, "active", "les-missing");
+        assert!(storage.get_with_version(&key).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn version_changes_on_each_put() {
+        // Different content → different len → different version.
+        let dir = TempDir::new().unwrap();
+        let storage = LocalFsStorage::new(dir.path());
+        let ctx = Context::single_user_local();
+        let key = StorageKey::lesson(&ctx, "active", "les-v");
+
+        storage.put(&key, Bytes::from_static(b"short")).await.unwrap();
+        let (_, v1) = storage.get_with_version(&key).await.unwrap().unwrap();
+        storage
+            .put(&key, Bytes::from_static(b"a longer body now"))
+            .await
+            .unwrap();
+        let (_, v2) = storage.get_with_version(&key).await.unwrap().unwrap();
+        assert_ne!(v1, v2);
+    }
+
+    #[tokio::test]
+    async fn cas_against_expected_none_fails_when_file_exists() {
+        let dir = TempDir::new().unwrap();
+        let storage = LocalFsStorage::new(dir.path());
+        let ctx = Context::single_user_local();
+        let key = StorageKey::lesson(&ctx, "active", "les-conflict");
+        storage.put(&key, Bytes::from_static(b"existing")).await.unwrap();
+        // Caller mistakenly thinks the file doesn't exist.
+        let ok = storage
+            .put_if_version(&key, Bytes::from_static(b"new"), None)
+            .await
+            .unwrap();
+        assert!(!ok);
+        assert_eq!(
+            storage.get(&key).await.unwrap().unwrap().as_ref(),
+            b"existing"
+        );
+    }
+
+    #[tokio::test]
+    async fn cas_against_expected_some_fails_when_file_missing() {
+        let dir = TempDir::new().unwrap();
+        let storage = LocalFsStorage::new(dir.path());
+        let ctx = Context::single_user_local();
+        let key = StorageKey::lesson(&ctx, "active", "les-phantom");
+        // Caller has a stale version for a file that no longer exists.
+        let fake_v = Version::from_bytes(vec![0u8; 24]);
+        let ok = storage
+            .put_if_version(&key, Bytes::from_static(b"data"), Some(&fake_v))
+            .await
+            .unwrap();
+        assert!(!ok);
+        // File still doesn't exist.
+        assert!(storage.get(&key).await.unwrap().is_none());
     }
 }

@@ -12,6 +12,7 @@
 
 pub mod buffer;
 pub mod context;
+pub mod error;
 pub mod events;
 pub mod lessons;
 pub mod lifecycle;
@@ -20,6 +21,8 @@ pub mod pid;
 pub mod sentiment;
 pub mod storage;
 pub mod yaml;
+
+pub use error::EngineError;
 
 // Curated re-exports (engine prelude).
 pub use context::{Context, ContextBuilder, SessionId, TeamId, TenantId, UserId};

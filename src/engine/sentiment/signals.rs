@@ -11,14 +11,16 @@
 //! that calls `lessons::record_sentiment_signal` via
 //! `Storage::put_if_version`.
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
+use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use thiserror::Error;
 use tracing::info;
 
 use crate::engine::context::Context;
+use crate::engine::storage::{Storage, StorageKey};
 
 use super::types::{
     AttributionMethod, CalibratedConfidence, Hazard, LoadedItemId, Polarity,
@@ -166,6 +168,97 @@ impl SignalWriter for LoggingSignalWriter {
 }
 
 // =====================================================================
+// StorageBackedSignalWriter (Day 16b D7) — persists each signal as a
+// standalone YAML file under `signals/<session>/<event-uuid>.yaml`.
+// Lesson-array aggregation deferred to Day 17.
+// =====================================================================
+
+/// Persists [`SentimentSignal`]s via the engine's [`Storage`] abstraction.
+/// Each signal lands at `StorageKey::sentiment_signal(ctx, session, event_uuid)`.
+///
+/// Day 16b scope: one signal per file. Day 17 will add lesson-array
+/// aggregation (the per-(session, lesson) signals get rolled into the
+/// lesson YAML's signals array).
+#[derive(Debug, Clone)]
+pub struct StorageBackedSignalWriter {
+    storage: Arc<dyn Storage>,
+}
+
+impl StorageBackedSignalWriter {
+    pub fn new(storage: Arc<dyn Storage>) -> Self {
+        Self { storage }
+    }
+}
+
+#[async_trait]
+impl SignalWriter for StorageBackedSignalWriter {
+    async fn record(
+        &self,
+        ctx: &Context,
+        signal: &SentimentSignal,
+    ) -> Result<(), SignalWriteError> {
+        let key = StorageKey::sentiment_signal(
+            ctx,
+            ctx.session_id.as_str(),
+            &signal.source_event_uuid,
+        );
+        let body = render_signal_yaml(signal);
+        // Create-only: one file per emitted signal. If we ever see a
+        // duplicate event_uuid the put_if_version with expected_version
+        // = None will return Ok(false) — we treat that as success-with-
+        // dedup (idempotent emit).
+        let _ok = self
+            .storage
+            .put_if_version(&key, Bytes::from(body), None)
+            .await
+            .map_err(SignalWriteError::backend)?;
+        Ok(())
+    }
+}
+
+/// Render a minimal YAML representation of a [`SentimentSignal`] for
+/// persistence. Schema:
+/// ```yaml
+/// item_id: les-xxx
+/// polarity: Positive
+/// calibrated_confidence: 0.92
+/// attribution_method: DirectMention
+/// detected_hazards: [LowConfidence]
+/// source_event_uuid: evt-1
+/// timestamp: 2026-05-13T18:00:00Z
+/// ```
+fn render_signal_yaml(s: &SentimentSignal) -> String {
+    let hazards = if s.detected_hazards.is_empty() {
+        "[]".to_string()
+    } else {
+        format!(
+            "[{}]",
+            s.detected_hazards
+                .iter()
+                .map(|h| format!("{h:?}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    };
+    format!(
+        "item_id: {item}\n\
+         polarity: {polarity:?}\n\
+         calibrated_confidence: {conf}\n\
+         attribution_method: {method:?}\n\
+         detected_hazards: {hazards}\n\
+         source_event_uuid: {uuid}\n\
+         timestamp: {ts}\n",
+        item = s.item_id,
+        polarity = s.polarity,
+        conf = s.calibrated_confidence.value(),
+        method = s.attribution_method,
+        hazards = hazards,
+        uuid = s.source_event_uuid,
+        ts = s.timestamp.to_rfc3339(),
+    )
+}
+
+// =====================================================================
 // MockSignalWriter — test fixture (D14)
 // =====================================================================
 
@@ -302,5 +395,55 @@ mod tests {
             abstentions: vec![],
         };
         assert!(!with_signals.is_empty());
+    }
+
+    // ---- StorageBackedSignalWriter (Day 16b D7) ----
+
+    use crate::engine::storage::MemoryStorage;
+
+    #[tokio::test]
+    async fn storage_backed_writer_persists_signal_to_storage() {
+        let storage: Arc<dyn Storage> = Arc::new(MemoryStorage::default());
+        let writer = StorageBackedSignalWriter::new(storage.clone());
+        let ctx = Context::single_user_local();
+        let signal = fake_signal("les-quokka-special");
+
+        writer.record(&ctx, &signal).await.unwrap();
+
+        let key = StorageKey::sentiment_signal(
+            &ctx,
+            ctx.session_id.as_str(),
+            &signal.source_event_uuid,
+        );
+        let stored = storage.get(&key).await.unwrap().unwrap();
+        let body = std::str::from_utf8(&stored).unwrap();
+        assert!(body.contains("item_id: les-quokka-special"));
+        assert!(body.contains("polarity: Positive"));
+        assert!(body.contains("source_event_uuid: evt-1"));
+    }
+
+    #[tokio::test]
+    async fn storage_backed_writer_dedups_on_same_event_uuid() {
+        // Same source_event_uuid → second record() is a no-op (put_if_version
+        // with expected=None returns Ok(false) when file exists).
+        let storage: Arc<dyn Storage> = Arc::new(MemoryStorage::default());
+        let writer = StorageBackedSignalWriter::new(storage.clone());
+        let ctx = Context::single_user_local();
+        let first = fake_signal("les-a");
+        let mut second = fake_signal("les-b");
+        second.source_event_uuid = first.source_event_uuid.clone();
+
+        writer.record(&ctx, &first).await.unwrap();
+        writer.record(&ctx, &second).await.unwrap();
+
+        let key = StorageKey::sentiment_signal(
+            &ctx,
+            ctx.session_id.as_str(),
+            &first.source_event_uuid,
+        );
+        let stored = storage.get(&key).await.unwrap().unwrap();
+        let body = std::str::from_utf8(&stored).unwrap();
+        // First write wins (item les-a, not les-b).
+        assert!(body.contains("item_id: les-a"));
     }
 }

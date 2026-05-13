@@ -28,7 +28,7 @@ pub use orchestrator::{Orchestrator, OrchestratorConfig};
 pub use pretrigger::Pretrigger;
 pub use signals::{
     AbstainReason, LoggingSignalWriter, OrchestratorOutput, SentimentSignal, SignalWriteError,
-    SignalWriter,
+    SignalWriter, StorageBackedSignalWriter,
 };
 pub use types::{
     AttributionConfidence, AttributionMethod, CalibratedConfidence, ClassificationRequest,
