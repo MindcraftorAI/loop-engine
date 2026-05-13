@@ -78,6 +78,10 @@ pub enum AbstainReason {
     /// orchestrator skips the signal rather than panicking or
     /// resurrecting state for an ended session.
     SessionRecycled,
+    /// Day 17 D4 — incoming `EngineEvent::UserTurn` carried a
+    /// `host_version` outside the orchestrator's configured tested
+    /// range AND policy `action = Abstain`. The whole turn is skipped.
+    UntestedHostVersion,
 }
 
 /// Output of [`Orchestrator::process_event`] for one input event.

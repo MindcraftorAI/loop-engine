@@ -52,7 +52,7 @@ use super::types::{
     Polarity, RecentTurn, TurnRole,
 };
 
-pub use config::OrchestratorConfig;
+pub use config::{HostVersionAction, HostVersionPolicy, OrchestratorConfig};
 use derive::derive_signals;
 use state::{push_turn, SessionPhase, SessionState};
 
@@ -154,11 +154,43 @@ impl Orchestrator {
         event: &EngineEvent,
     ) -> OrchestratorOutput {
         let EngineEvent::UserTurn {
-            event_uuid, text, ..
+            event_uuid,
+            text,
+            host_version,
+            ..
         } = event
         else {
             unreachable!("dispatch guarantees UserTurn here");
         };
+
+        // Day 17 D4: HostVersion tripwire. Fires BEFORE the classifier
+        // call so we don't pay the LLM-latency cost on an out-of-range
+        // host version we don't trust. When policy is off (default),
+        // this is a no-op.
+        if let Some(hv) = host_version {
+            let policy = &self.inner.config.host_version_policy;
+            if policy.is_out_of_range(hv.as_str()) {
+                match policy.action {
+                    HostVersionAction::Warn => {
+                        warn!(
+                            host_version = %hv,
+                            "host version outside tested range (warn-only)"
+                        );
+                    }
+                    HostVersionAction::Abstain => {
+                        warn!(
+                            host_version = %hv,
+                            event = %event_uuid,
+                            "host version outside tested range; abstaining"
+                        );
+                        return OrchestratorOutput {
+                            signals: vec![],
+                            abstentions: vec![(None, AbstainReason::UntestedHostVersion)],
+                        };
+                    }
+                }
+            }
+        }
 
         // === Critical section 1: append turn, snapshot manifest + request ===
         let request = {
@@ -568,5 +600,108 @@ mod tests {
             out.abstentions[0].1,
             AbstainReason::NoProximalReference
         ));
+    }
+
+    // ---- Day 17 D4: HostVersion tripwire ----
+
+    fn user_turn_event_with_host_version(
+        session_id: &SessionId,
+        version: &str,
+    ) -> EngineEvent {
+        EngineEvent::UserTurn {
+            session_id: session_id.clone(),
+            event_uuid: "evt-tripwire".into(),
+            parent_event_uuid: None,
+            text: "thanks".into(),
+            timestamp: Utc::now(),
+            cwd: None,
+            host_version: Some(crate::engine::events::HostVersion::new(version.to_string())),
+            project_tag: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn tripwire_off_by_default_no_abstain() {
+        let (orch, _, _) = orchestrator_with_mocks();
+        let ctx = Context::single_user_local();
+        // Default policy is off — even an "obviously bad" version passes through.
+        let out = orch
+            .process_event(&ctx, &user_turn_event_with_host_version(&ctx.session_id, "0.0.0"))
+            .await;
+        // Mock classifier abstains (empty queue) — verifies tripwire didn't fire its own abstain.
+        assert!(out.abstentions.iter().all(|(_, r)| !matches!(r, AbstainReason::UntestedHostVersion)));
+    }
+
+    #[tokio::test]
+    async fn tripwire_warn_action_does_not_abstain() {
+        let classifier: Arc<dyn SentimentClassifier> =
+            Arc::new(MockSentimentClassifier::default());
+        let writer: Arc<dyn SignalWriter> = Arc::new(MockSignalWriter::default());
+        let config = OrchestratorConfig {
+            host_version_policy: HostVersionPolicy {
+                tested_range: Some("2.0.0".to_string()..="2.1.999".to_string()),
+                action: HostVersionAction::Warn,
+            },
+            ..OrchestratorConfig::default()
+        };
+        let orch = Orchestrator::new(classifier, writer, config);
+        let ctx = Context::single_user_local();
+        // "1.0.0" is below the tested range — Warn action means we still process.
+        let out = orch
+            .process_event(&ctx, &user_turn_event_with_host_version(&ctx.session_id, "1.0.0"))
+            .await;
+        assert!(
+            out.abstentions
+                .iter()
+                .all(|(_, r)| !matches!(r, AbstainReason::UntestedHostVersion)),
+            "warn-action should NOT abstain"
+        );
+    }
+
+    #[tokio::test]
+    async fn tripwire_abstain_action_skips_turn_for_out_of_range_version() {
+        let classifier: Arc<dyn SentimentClassifier> =
+            Arc::new(MockSentimentClassifier::default());
+        let writer: Arc<dyn SignalWriter> = Arc::new(MockSignalWriter::default());
+        let config = OrchestratorConfig {
+            host_version_policy: HostVersionPolicy {
+                tested_range: Some("2.0.0".to_string()..="2.1.999".to_string()),
+                action: HostVersionAction::Abstain,
+            },
+            ..OrchestratorConfig::default()
+        };
+        let orch = Orchestrator::new(classifier, writer, config);
+        let ctx = Context::single_user_local();
+        let out = orch
+            .process_event(&ctx, &user_turn_event_with_host_version(&ctx.session_id, "9.9.9"))
+            .await;
+        assert!(out.signals.is_empty());
+        assert_eq!(out.abstentions.len(), 1);
+        assert!(matches!(out.abstentions[0].1, AbstainReason::UntestedHostVersion));
+    }
+
+    #[tokio::test]
+    async fn tripwire_abstain_action_passes_through_in_range_version() {
+        let classifier: Arc<dyn SentimentClassifier> =
+            Arc::new(MockSentimentClassifier::default());
+        let writer: Arc<dyn SignalWriter> = Arc::new(MockSignalWriter::default());
+        let config = OrchestratorConfig {
+            host_version_policy: HostVersionPolicy {
+                tested_range: Some("2.0.0".to_string()..="2.1.999".to_string()),
+                action: HostVersionAction::Abstain,
+            },
+            ..OrchestratorConfig::default()
+        };
+        let orch = Orchestrator::new(classifier, writer, config);
+        let ctx = Context::single_user_local();
+        let out = orch
+            .process_event(&ctx, &user_turn_event_with_host_version(&ctx.session_id, "2.1.139"))
+            .await;
+        // No UntestedHostVersion abstain — mock classifier's empty-queue
+        // ClassifierAbstained is the only abstention here.
+        assert!(out
+            .abstentions
+            .iter()
+            .all(|(_, r)| !matches!(r, AbstainReason::UntestedHostVersion)));
     }
 }

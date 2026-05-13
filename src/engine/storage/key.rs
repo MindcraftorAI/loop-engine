@@ -49,6 +49,14 @@ impl StorageKey {
         Self(prefixed(ctx, &suffix))
     }
 
+    /// Prefix key for listing all lessons in a given status directory.
+    /// Used by Day 17 solicitor for scan-by-status. Single-user:
+    /// `lessons/<status>`; multi-tenant: `tenants/.../lessons/<status>`.
+    pub fn lesson_status_prefix(ctx: &Context, status: &str) -> Self {
+        let suffix = format!("lessons/{status}");
+        Self(prefixed(ctx, &suffix))
+    }
+
     /// Construct from a pre-validated path string. **Internal use only**
     /// — accessible to engine modules (e.g. `LocalFsStorage::list`
     /// constructing keys from directory entries). Not part of the
