@@ -10,17 +10,29 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use chrono::{DateTime, Utc};
 
 use super::error::StorageError;
 use super::key::StorageKey;
+use super::metadata::StorageMetadata;
 use super::sealed::Sealed;
 use super::version::Version;
 use super::Storage;
 
+/// Phase B C-B1: per-entry record carrying bytes + version + metadata
+/// (birthtime + mtime tracked at put time so `metadata` can return them).
+#[derive(Debug, Clone)]
+struct Entry {
+    bytes: Bytes,
+    version: Version,
+    created_at: DateTime<Utc>,
+    modified_at: DateTime<Utc>,
+}
+
 /// In-memory key/value storage. Versioned for full CAS support.
 #[derive(Debug, Default)]
 pub struct MemoryStorage {
-    inner: Mutex<BTreeMap<StorageKey, (Bytes, Version)>>,
+    inner: Mutex<BTreeMap<StorageKey, Entry>>,
     /// Monotonic version counter shared across all keys. Each successful
     /// put assigns the next value as that key's new version.
     next_version: AtomicU64,
@@ -39,13 +51,24 @@ impl Sealed for MemoryStorage {}
 impl Storage for MemoryStorage {
     async fn get(&self, key: &StorageKey) -> Result<Option<Bytes>, StorageError> {
         let guard = self.inner.lock().expect("MemoryStorage mutex poisoned");
-        Ok(guard.get(key).map(|(b, _)| b.clone()))
+        Ok(guard.get(key).map(|e| e.bytes.clone()))
     }
 
     async fn put(&self, key: &StorageKey, bytes: Bytes) -> Result<(), StorageError> {
         let version = self.mint_version();
+        let now = Utc::now();
         let mut guard = self.inner.lock().expect("MemoryStorage mutex poisoned");
-        guard.insert(key.clone(), (bytes, version));
+        // Preserve created_at on overwrite (key birthtime is first-write).
+        let created_at = guard.get(key).map(|e| e.created_at).unwrap_or(now);
+        guard.insert(
+            key.clone(),
+            Entry {
+                bytes,
+                version,
+                created_at,
+                modified_at: now,
+            },
+        );
         Ok(())
     }
 
@@ -73,14 +96,32 @@ impl Storage for MemoryStorage {
         expected_version: Option<&Version>,
     ) -> Result<bool, StorageError> {
         let new_version = self.mint_version();
+        let now = Utc::now();
         let mut guard = self.inner.lock().expect("MemoryStorage mutex poisoned");
         match (guard.get(key), expected_version) {
             (None, None) => {
-                guard.insert(key.clone(), (bytes, new_version));
+                guard.insert(
+                    key.clone(),
+                    Entry {
+                        bytes,
+                        version: new_version,
+                        created_at: now,
+                        modified_at: now,
+                    },
+                );
                 Ok(true)
             }
-            (Some((_, current)), Some(expected)) if current == expected => {
-                guard.insert(key.clone(), (bytes, new_version));
+            (Some(existing), Some(expected)) if existing.version == *expected => {
+                let created_at = existing.created_at;
+                guard.insert(
+                    key.clone(),
+                    Entry {
+                        bytes,
+                        version: new_version,
+                        created_at,
+                        modified_at: now,
+                    },
+                );
                 Ok(true)
             }
             _ => Ok(false),
@@ -92,7 +133,19 @@ impl Storage for MemoryStorage {
         key: &StorageKey,
     ) -> Result<Option<(Bytes, Version)>, StorageError> {
         let guard = self.inner.lock().expect("MemoryStorage mutex poisoned");
-        Ok(guard.get(key).cloned())
+        Ok(guard.get(key).map(|e| (e.bytes.clone(), e.version.clone())))
+    }
+
+    async fn metadata(
+        &self,
+        key: &StorageKey,
+    ) -> Result<Option<StorageMetadata>, StorageError> {
+        let guard = self.inner.lock().expect("MemoryStorage mutex poisoned");
+        Ok(guard.get(key).map(|e| StorageMetadata {
+            birthtime: Some(e.created_at),
+            mtime: Some(e.modified_at),
+            size_bytes: e.bytes.len() as u64,
+        }))
     }
 }
 
@@ -177,6 +230,48 @@ mod tests {
         assert!(!ok);
         // Original value still there.
         assert_eq!(s.get(&k).await.unwrap().unwrap().as_ref(), b"first");
+    }
+
+    // Phase B C-B1: Storage::metadata tests
+
+    #[tokio::test]
+    async fn metadata_returns_none_for_missing_key() {
+        let s = MemoryStorage::default();
+        let k = key("nonexistent");
+        assert!(s.metadata(&k).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn metadata_returns_birthtime_and_size_after_put() {
+        let s = MemoryStorage::default();
+        let k = key("with-meta");
+        s.put(&k, Bytes::from_static(b"hello")).await.unwrap();
+        let meta = s.metadata(&k).await.unwrap().unwrap();
+        assert!(meta.birthtime.is_some());
+        assert!(meta.mtime.is_some());
+        assert_eq!(meta.size_bytes, 5);
+    }
+
+    #[tokio::test]
+    async fn metadata_preserves_birthtime_on_overwrite() {
+        // Critical for the promotion gate: tamper-proof age means
+        // overwriting the lesson body does NOT reset the creation time.
+        let s = MemoryStorage::default();
+        let k = key("birthtime-preserve");
+        s.put(&k, Bytes::from_static(b"original")).await.unwrap();
+        let m1 = s.metadata(&k).await.unwrap().unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        s.put(&k, Bytes::from_static(b"overwritten-larger"))
+            .await
+            .unwrap();
+        let m2 = s.metadata(&k).await.unwrap().unwrap();
+        assert_eq!(
+            m1.birthtime, m2.birthtime,
+            "overwrite must NOT reset birthtime"
+        );
+        // mtime advances; size changes.
+        assert!(m2.mtime > m1.mtime);
+        assert_eq!(m2.size_bytes, 18);
     }
 
     #[tokio::test]

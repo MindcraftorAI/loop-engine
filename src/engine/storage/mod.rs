@@ -19,12 +19,14 @@ pub mod filesystem;
 pub mod key;
 pub(crate) mod lock;
 pub mod memory;
+pub mod metadata;
 pub mod version;
 
 pub use error::StorageError;
 pub use filesystem::LocalFsStorage;
 pub use key::StorageKey;
 pub use memory::MemoryStorage;
+pub use metadata::StorageMetadata;
 pub use version::Version;
 
 /// Engine storage abstraction.
@@ -78,6 +80,19 @@ pub trait Storage: Send + Sync + Debug + sealed::Sealed {
         &self,
         key: &StorageKey,
     ) -> Result<Option<(Bytes, Version)>, StorageError>;
+
+    /// Phase B C-B1: read filesystem-level metadata (birthtime, mtime,
+    /// size). Returns `Ok(None)` for absent keys. Used by the promotion
+    /// gate to defend against tampered `created_at` frontmatter.
+    ///
+    /// `birthtime` is `Option<DateTime<Utc>>` because not every backend
+    /// can determine creation time (FAT32, older Linux kernels, some
+    /// network mounts). When `None`, the gate's tamper check abstains
+    /// rather than treating the absence as either pass or fail.
+    async fn metadata(
+        &self,
+        key: &StorageKey,
+    ) -> Result<Option<StorageMetadata>, StorageError>;
 }
 
 pub(crate) mod sealed {

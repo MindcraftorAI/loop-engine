@@ -148,6 +148,51 @@ impl Storage for LocalFsStorage {
             .await
             .map_err(StorageError::backend)?
     }
+
+    async fn metadata(
+        &self,
+        key: &StorageKey,
+    ) -> Result<Option<crate::engine::storage::StorageMetadata>, StorageError> {
+        let path = self.resolve(key);
+        // Sync fs ops inside spawn_blocking (Day 16b D1 pattern).
+        tokio::task::spawn_blocking(move || metadata_sync(&path))
+            .await
+            .map_err(StorageError::backend)?
+    }
+}
+
+/// Sync impl for Storage::metadata. Returns Ok(None) on missing.
+/// Birthtime is best-effort: only emitted when the platform + FS
+/// actually report it.
+fn metadata_sync(path: &Path) -> Result<Option<crate::engine::storage::StorageMetadata>, StorageError> {
+    use crate::engine::storage::StorageMetadata;
+    use chrono::DateTime;
+    use std::time::UNIX_EPOCH;
+
+    let meta = match std::fs::metadata(path) {
+        Ok(m) => m,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(StorageError::backend(e)),
+    };
+
+    // birthtime via Metadata::created() — supported on macOS (st_birthtime)
+    // + Linux statx (kernel ≥4.11) + Windows. Older Linux returns Err;
+    // we treat that as "no birthtime" rather than as a hard error.
+    let birthtime = meta.created().ok().and_then(|sys| {
+        sys.duration_since(UNIX_EPOCH)
+            .ok()
+            .and_then(|d| DateTime::<chrono::Utc>::from_timestamp(d.as_secs() as i64, d.subsec_nanos()))
+    });
+    let mtime = meta.modified().ok().and_then(|sys| {
+        sys.duration_since(UNIX_EPOCH)
+            .ok()
+            .and_then(|d| DateTime::<chrono::Utc>::from_timestamp(d.as_secs() as i64, d.subsec_nanos()))
+    });
+    Ok(Some(StorageMetadata {
+        birthtime,
+        mtime,
+        size_bytes: meta.len(),
+    }))
 }
 
 /// Sync impl: hold sidecar lock during read + stat + write so the

@@ -85,13 +85,31 @@ impl TestHarness {
         id: &str,
         body: &str,
     ) -> Result<StorageKey, EngineError> {
+        // Default created_at is 2026-05-13 (the build date). Tests that
+        // need a different timestamp use `seed_lesson_with_created_at`.
+        self.seed_lesson_with_created_at(status, id, body, "2026-05-13T00:00:00Z")
+            .await
+    }
+
+    /// Phase B C-B1 extension: seed a lesson with a CALLER-CONTROLLED
+    /// `created_at` timestamp in the frontmatter. The promotion gate
+    /// tests use this to construct lessons that look age-old (older
+    /// than the 24h time-floor) or tampered (frontmatter says days old
+    /// but in-memory birthtime says fresh).
+    pub async fn seed_lesson_with_created_at(
+        &self,
+        status: &str,
+        id: &str,
+        body: &str,
+        created_at_iso: &str,
+    ) -> Result<StorageKey, EngineError> {
         let key = StorageKey::lesson(&self.ctx, status, id);
         let content = format!(
             "---\n\
              id: {id}\n\
              description: \"seeded by TestHarness\"\n\
              status: {status}\n\
-             created_at: \"2026-05-13T00:00:00Z\"\n\
+             created_at: \"{created_at_iso}\"\n\
              applied_count: 0\n\
              thumbs_up_count: 0\n\
              thumbs_down_count: 0\n\
