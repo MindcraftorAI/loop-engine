@@ -13,6 +13,7 @@ use std::io;
 
 use thiserror::Error;
 
+use crate::engine::lessons::gate::BlockReason;
 use crate::engine::storage::StorageError;
 
 #[derive(Debug, Error)]
@@ -47,6 +48,19 @@ pub enum EngineError {
     #[error("io error: {0}")]
     Io(#[source] io::Error),
 
+    /// Promotion gate blocked the requested promotion. Added preemptively
+    /// in Phase B C-B2 so Phase G `transitions::promote` has a typed
+    /// failure to raise. The gate itself returns a `GateDecision` rather
+    /// than this error — the error is wrapped at the transition layer
+    /// when "must promote" is a precondition.
+    ///
+    /// The Display string enumerates each reason via
+    /// [`BlockReason`]'s `Display` impl, separated by `; `. CLIs can
+    /// scrape it or pattern-match the `reasons` field directly for
+    /// structured access.
+    #[error("promotion blocked: {}", format_reasons(.reasons))]
+    PromotionBlocked { reasons: Vec<BlockReason> },
+
     /// Genuinely uncategorized engine-level error. Use sparingly — adding
     /// a named variant is preferred when the error class repeats.
     #[error("engine error: {0}")]
@@ -73,6 +87,16 @@ impl From<StorageError> for EngineError {
     fn from(err: StorageError) -> Self {
         Self::Storage(err)
     }
+}
+
+/// Render a slice of [`BlockReason`]s as `"reason1; reason2; ..."`.
+/// Used by `EngineError::PromotionBlocked`'s thiserror format string.
+fn format_reasons(reasons: &[BlockReason]) -> String {
+    reasons
+        .iter()
+        .map(|r| r.to_string())
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 impl From<io::Error> for EngineError {
@@ -127,5 +151,27 @@ mod tests {
         let inner = io::Error::other("yaml-ish");
         let err = EngineError::yaml(inner);
         assert!(matches!(err, EngineError::Yaml(_)));
+    }
+
+    #[test]
+    fn promotion_blocked_display_enumerates_each_reason() {
+        let err = EngineError::PromotionBlocked {
+            reasons: vec![
+                BlockReason::MissingCausalNarrative,
+                BlockReason::ThumbsDownBlock { count: 2 },
+            ],
+        };
+        let s = format!("{err}");
+        assert!(s.contains("missing-causal-narrative"), "got: {s}");
+        assert!(s.contains("thumbs-down-block: count=2"), "got: {s}");
+        assert!(s.contains("; "), "expected '; ' separator, got: {s}");
+    }
+
+    #[test]
+    fn promotion_blocked_display_empty_reasons_renders_cleanly() {
+        // Empty Vec is constructable (PromotionBlocked is public); the
+        // gate would never produce this, but Display must not panic.
+        let err = EngineError::PromotionBlocked { reasons: vec![] };
+        let _ = format!("{err}"); // must not panic
     }
 }

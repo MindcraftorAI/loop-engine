@@ -11,7 +11,9 @@
 //! that calls `lessons::record_sentiment_signal` via
 //! `Storage::put_if_version`.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+#[cfg(any(test, feature = "test-fixtures"))]
+use std::sync::Mutex;
 
 use async_trait::async_trait;
 use bytes::Bytes;

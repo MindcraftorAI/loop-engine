@@ -16,6 +16,7 @@
 //! racing, and the atomic-rename of write_lesson means the TS-side worst
 //! case is a lost update (not a corrupted file).
 
+pub mod gate;
 pub mod loader;
 pub mod lock;
 pub mod signals;
@@ -23,6 +24,9 @@ pub mod signals;
 // Canonical async API (Phase A C4 + C5):
 pub use loader::{get_by_id, LessonFullContent, LoadedLesson};
 pub use signals::{record_signal, SignalPolarity};
+
+// Phase B C-B2 — promotion gate (the marketing wedge):
+pub use gate::{check_promotion_gate, BlockReason, GateDecision, PassReason, PromotionConfig};
 
 // Deprecated sync wrappers — retained for backward compat through Phase
 // A. Retire in Phase F or G when the daemon binary's wiring is fully
