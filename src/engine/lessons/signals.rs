@@ -106,13 +106,22 @@ pub fn record_sentiment_signal(id: &str, polarity: SignalPolarity) -> Result<Loa
 ///   concurrent supersession/discard doesn't redirect the write.
 ///
 /// Returns:
-/// - `Ok(LoadedLesson)` on success (the updated lesson)
+/// - `Ok(LoadedLesson)` on success (the updated lesson). The returned
+///   `LoadedLesson.path` is a SYNTHETIC `PathBuf` derived from the
+///   resolved `StorageKey` (matches `get_by_id`'s contract). It is
+///   NOT a real filesystem path for in-memory backends — callers must
+///   not pass it to `std::fs` ops; use Storage trait methods instead.
 /// - `Err(EngineError::LessonNotFound { id })` if the lesson is absent
-///   at any point during the CAS loop (caller might have deleted it
-///   between iterations)
+///   at any point during the CAS loop. This includes BOTH the deletion
+///   case (lesson removed via discard) AND the moved-to-different-status
+///   case (lesson was in `active/` when we started, now in `archived/`
+///   — `get_with_version` on the original key returns None).
 /// - `Err(EngineError::CasContended { key, retries })` on retry-budget
-///   exhaustion
+///   exhaustion (5 failed CAS attempts in a row).
 /// - `Err(EngineError::Storage(_)/Parse(_)/Yaml(_))` on read/parse failures
+///   from the Storage backend or YAML pipeline.
+///
+/// Phase A audit M1/M2 doc clarifications (2026-05-13).
 pub async fn record_signal(
     ctx: &Context,
     storage: &dyn Storage,
