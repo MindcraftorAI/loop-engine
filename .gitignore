@@ -2,3 +2,8 @@
 *.swp
 .DS_Store
 .claude/
+# Personal development docs (research, learn-notes, post-research, audit
+# reports, ADRs, competitive analysis) live OUTSIDE this repo at the
+# parent workspace level (`../docs/`). The engine repo ships clean for
+# eventual public release.
+/docs/
