@@ -48,6 +48,14 @@ pub async fn spawn_watcher(
     dir: PathBuf,
     events_tx: UnboundedSender<WatcherEvent>,
 ) -> Result<WatcherHandle> {
+    // Canonicalize once at entry. macOS FSEvents reports realpaths
+    // (`/private/var/...`) while a caller-supplied path may be a
+    // symlink (`/var/...`). Mixing the two as `BTreeMap<PathBuf, _>`
+    // keys produced duplicate cursors → duplicate `SessionStarted`s.
+    // Fall back to the original path if canonicalization fails
+    // (e.g. directory not yet created in some pathological test).
+    let dir = std::fs::canonicalize(&dir).unwrap_or(dir);
+
     let (path_tx, path_rx) = tokio::sync::mpsc::unbounded_channel::<PathChange>();
 
     // notify callback runs on its own thread; tx is cloneable + send-safe.
@@ -71,12 +79,43 @@ pub async fn spawn_watcher(
         .watch(&dir, RecursiveMode::NonRecursive)
         .with_context(|| format!("watching {}", dir.display()))?;
 
+    // Audit Day 13 — A5 fix: emit `SessionStarted` for pre-existing JSONL
+    // files visible at watcher startup. Done by synthesizing a Modify
+    // PathChange per file; handle_change picks the tail-from-now cursor
+    // mode for Modify-on-unknown (A1 fix).
+    initial_scan(&dir, &path_tx);
+
     let runner_task = tokio::spawn(run_loop(path_rx, events_tx));
 
     Ok(WatcherHandle {
         _watcher: watcher,
         _runner_task: runner_task,
     })
+}
+
+/// One-shot directory scan at watcher startup. Closes audit Day 13 A5:
+/// pre-existing `.jsonl` files were previously invisible until they
+/// next received a write event, so daemons starting against an
+/// already-populated `~/.claude/projects/<dir>/` could miss the first
+/// turn that triggered their wake-up.
+fn initial_scan(dir: &Path, path_tx: &UnboundedSender<PathChange>) {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(e) => {
+            warn!(dir = %dir.display(), err = %e, "watcher: initial scan failed; pre-existing files will be missed until next FSEvent");
+            return;
+        }
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+            continue;
+        }
+        let _ = path_tx.send(PathChange {
+            path,
+            kind: PathChangeKind::Modify,
+        });
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -132,19 +171,24 @@ fn handle_change(
         return Ok(());
     }
 
-    // For Create events, spin up a cursor at offset 0 (we want the first
-    // events of a new session). For Modify on a known file, the cursor
-    // already exists; for Modify on an unknown file (we missed the Create
-    // somehow), treat as new — start at 0 so we don't miss content.
+    // Audit Day 13 A1+A5 fix: cursor mode by event kind.
+    //   - `Create` = truly new file (born during this watcher session).
+    //     Replay from offset 0 — we want every byte.
+    //   - Anything else (`Modify` or `Other`) = pre-existing OR initial-
+    //     scan synthesized. Tail-from-now — pre-existing content already
+    //     happened and is not part of "live" verification.
+    // SessionStarted fires on first sight regardless of kind (A5).
     let is_new = !cursors.contains_key(&change.path);
     let cursor = match cursors.get_mut(&change.path) {
         Some(c) => c,
         None => {
-            // Synthesize SessionStarted on first sight, if it's a Create.
-            if change.kind == PathChangeKind::Create {
-                emit_session_started(&change.path, &session_id, events_tx);
-            }
-            let c = FileCursor::new_at_start(change.path.clone(), session_id.clone())?;
+            emit_session_started(&change.path, &session_id, events_tx);
+            let c = match change.kind {
+                PathChangeKind::Create => {
+                    FileCursor::new_at_start(change.path.clone(), session_id.clone())?
+                }
+                _ => FileCursor::new_at_eof(change.path.clone(), session_id.clone())?,
+            };
             cursors.insert(change.path.clone(), c);
             cursors.get_mut(&change.path).unwrap()
         }
@@ -179,26 +223,52 @@ fn process_cursor(
     cursor: &mut FileCursor,
     events_tx: &UnboundedSender<WatcherEvent>,
 ) -> Result<()> {
-    let action = cursor.classify()?;
-    let (from, count) = match action {
-        CursorAction::NoChange => return Ok(()),
-        CursorAction::Removed => {
-            let _ = events_tx.send(WatcherEvent::SessionEnded {
-                session_id: cursor.session_id.clone(),
-            });
+    // Audit Day 13 A2+A3 fix: loop until file is caught up.
+    //
+    // Prior bug A3: a single FSEvent triggered one read capped at
+    // `MAX_APPEND_READ`. If the writer flushed >1MB then stopped, the
+    // remaining bytes were stranded until the NEXT FSEvent — which
+    // might never arrive.
+    //
+    // Prior bug A2: offset advance used `count` (the requested read
+    // size) instead of `result.actual_read`. If the file shrank between
+    // classify and read (or short-read at EOF), the cursor advanced
+    // past bytes that weren't actually consumed. Fix: use
+    // `result.advance()` = `actual_read - fragment_len`.
+    //
+    // The MAX_ITER guard caps the loop in case a pathological writer
+    // outpaces us; 64 * 1MB = 64MB per FSEvent is generous for a
+    // line-oriented append-only transcript.
+    const MAX_ITER: u32 = 64;
+    for _ in 0..MAX_ITER {
+        let action = cursor.classify()?;
+        let (from, count) = match action {
+            CursorAction::NoChange => return Ok(()),
+            CursorAction::Removed => {
+                let _ = events_tx.send(WatcherEvent::SessionEnded {
+                    session_id: cursor.session_id.clone(),
+                });
+                return Ok(());
+            }
+            CursorAction::Append { read_bytes } => {
+                (cursor.offset, read_bytes.min(MAX_APPEND_READ))
+            }
+            CursorAction::ReplayFromStart { total_bytes } => {
+                (0, total_bytes.min(MAX_APPEND_READ))
+            }
+        };
+
+        let result = cursor.read_appended(from, count)?;
+        for line in &result.lines {
+            process_line(cursor, line, events_tx);
+        }
+        cursor.offset = from + result.advance();
+
+        // If we didn't hit the read cap, the file is caught up for now.
+        if count < MAX_APPEND_READ {
             return Ok(());
         }
-        CursorAction::Append { read_bytes } => (cursor.offset, read_bytes.min(MAX_APPEND_READ)),
-        CursorAction::ReplayFromStart { total_bytes } => (0, total_bytes.min(MAX_APPEND_READ)),
-    };
-
-    let (lines, fragment_len) = cursor.read_appended(from, count)?;
-    for line in &lines {
-        process_line(cursor, line, events_tx);
     }
-    // Advance offset past complete lines only; fragment stays buffered
-    // (the next classify will re-read it once the writer flushes the \n).
-    cursor.offset = from + count - fragment_len;
     Ok(())
 }
 

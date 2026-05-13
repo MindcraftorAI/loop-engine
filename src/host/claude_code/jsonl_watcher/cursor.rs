@@ -42,6 +42,24 @@ pub enum CursorAction {
     Removed,
 }
 
+/// Result of `read_appended`. Audit Day 13 A2: caller must use
+/// `actual_read - fragment_len` to advance offset, not the requested
+/// `limit` (which may be larger than what was actually readable).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReadAppendedResult {
+    pub lines: Vec<String>,
+    pub actual_read: u64,
+    pub fragment_len: u64,
+}
+
+impl ReadAppendedResult {
+    /// The number of bytes the cursor should advance past — only complete
+    /// lines, never into the trailing fragment.
+    pub fn advance(&self) -> u64 {
+        self.actual_read.saturating_sub(self.fragment_len)
+    }
+}
+
 impl FileCursor {
     /// Initialize a cursor that starts at the current file size (tail-from-now).
     /// Per learn note decision: we do NOT replay history on startup.
@@ -125,13 +143,19 @@ impl FileCursor {
         Ok(CursorAction::Append { read_bytes })
     }
 
-    /// Read the appended bytes from the file starting at `self.offset`.
-    /// Returns `(lines, trailing_fragment_len)`. The trailing-fragment length
-    /// is the number of bytes at the end of the buffer that don't form a
-    /// complete line (no terminating `\n`). The caller advances `offset`
-    /// past all complete lines but stops before the fragment, so a future
-    /// classify+read will pick up the rest after the next write flushes.
-    pub fn read_appended(&self, from: u64, limit: u64) -> Result<(Vec<String>, u64)> {
+    /// Read the appended bytes from the file starting at `from`. Returns
+    /// the parsed complete lines, the actual bytes read, and the trailing
+    /// fragment length.
+    ///
+    /// Audit Day 13 — A2 fix: actual bytes read may be less than `limit`
+    /// (short read at EOF, or file shrank between classify and read). The
+    /// caller must advance `offset` by `actual_read - fragment_len`, NOT
+    /// by `limit - fragment_len` (the prior bug consumed phantom bytes).
+    pub fn read_appended(
+        &self,
+        from: u64,
+        limit: u64,
+    ) -> Result<ReadAppendedResult> {
         let mut file =
             File::open(&self.path).with_context(|| format!("open {}", self.path.display()))?;
         file.seek(SeekFrom::Start(from))
@@ -160,7 +184,11 @@ impl FileCursor {
                 .map(|s| s.to_string())
                 .collect()
         };
-        Ok((lines, fragment_bytes.len() as u64))
+        Ok(ReadAppendedResult {
+            lines,
+            actual_read: read as u64,
+            fragment_len: fragment_bytes.len() as u64,
+        })
     }
 
     /// Helper: derive session_id from the JSONL filename (stem before `.jsonl`).
@@ -277,9 +305,10 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = write_file(&dir, "s.jsonl", "line1\nline2\nline3\n");
         let cursor = FileCursor::new_at_start(path, "s".into()).unwrap();
-        let (lines, fragment) = cursor.read_appended(0, 18).unwrap();
-        assert_eq!(lines, vec!["line1", "line2", "line3"]);
-        assert_eq!(fragment, 0);
+        let result = cursor.read_appended(0, 18).unwrap();
+        assert_eq!(result.lines, vec!["line1", "line2", "line3"]);
+        assert_eq!(result.fragment_len, 0);
+        assert_eq!(result.actual_read, 18);
     }
 
     #[test]
@@ -287,10 +316,12 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = write_file(&dir, "s.jsonl", "complete\npartial");
         let cursor = FileCursor::new_at_start(path, "s".into()).unwrap();
-        let (lines, fragment) = cursor.read_appended(0, 17).unwrap();
-        assert_eq!(lines, vec!["complete"]);
+        let result = cursor.read_appended(0, 17).unwrap();
+        assert_eq!(result.lines, vec!["complete"]);
         // "partial" is 7 chars — the trailing fragment that has no \n.
-        assert_eq!(fragment, 7);
+        assert_eq!(result.fragment_len, 7);
+        assert_eq!(result.actual_read, 16); // "complete\npartial" = 16 bytes
+        assert_eq!(result.advance(), 9); // past "complete\n" only
     }
 
     #[test]
@@ -298,9 +329,11 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = write_file(&dir, "s.jsonl", "no_newline_here");
         let cursor = FileCursor::new_at_start(path, "s".into()).unwrap();
-        let (lines, fragment) = cursor.read_appended(0, 15).unwrap();
-        assert!(lines.is_empty());
-        assert_eq!(fragment, 15);
+        let result = cursor.read_appended(0, 15).unwrap();
+        assert!(result.lines.is_empty());
+        assert_eq!(result.fragment_len, 15);
+        assert_eq!(result.actual_read, 15);
+        assert_eq!(result.advance(), 0);
     }
 
     #[test]
