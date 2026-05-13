@@ -71,6 +71,11 @@ pub enum AbstainReason {
     /// Day 16a D12 — UserInterrupt arrived but no proximal assistant turn
     /// referenced a loaded item (sentiment-design-rules rule 15).
     NoProximalReference,
+    /// Day 16a audit C1 — session was concurrently removed (via
+    /// `SessionEnded`) while a classifier call was in flight. The
+    /// orchestrator skips the signal rather than panicking or
+    /// resurrecting state for an ended session.
+    SessionRecycled,
 }
 
 /// Output of [`Orchestrator::process_event`] for one input event.

@@ -21,7 +21,10 @@ pub mod types;
 
 pub use attribution::{attribute_signal, attribute_signal_with_fallback, Attribution};
 pub use classifier::{ClassifierError, SentimentClassifier};
-pub use orchestrator::{Orchestrator, OrchestratorConfig, SessionPhase, SessionState};
+// Audit M6 fix: `SessionState` / `SessionPhase` are internal plumbing
+// and not part of the engine's public surface. Only `Orchestrator` +
+// `OrchestratorConfig` are exposed.
+pub use orchestrator::{Orchestrator, OrchestratorConfig};
 pub use pretrigger::Pretrigger;
 pub use signals::{
     AbstainReason, LoggingSignalWriter, OrchestratorOutput, SentimentSignal, SignalWriteError,
