@@ -40,6 +40,7 @@ use crate::engine::yaml::{combine_frontmatter, split_frontmatter_normalized};
 #[allow(deprecated)] // sync wrapper deliberately keeps the deprecated import
 use super::loader::get_lesson_by_id;
 use super::loader::{get_by_id, LoadedLesson};
+#[allow(deprecated)] // sync wrapper still consumes the deprecated lock helper
 use super::lock::with_lock;
 
 /// Phase A C5: bounded retry budget for the CAS loop in `record_signal`.
@@ -82,6 +83,7 @@ pub fn record_sentiment_signal(id: &str, polarity: SignalPolarity) -> Result<Loa
     let initial = get_lesson_by_id(id)?.ok_or_else(|| anyhow!("lesson not found: {id}"))?;
     let path = initial.path.clone();
 
+    #[allow(deprecated)]
     with_lock(&path, || {
         let fresh = load_locked(&path, &initial.status_dir)?;
         let updated = apply_sentiment_signal(fresh, polarity)?;
@@ -600,8 +602,7 @@ mod tests {
     async fn record_signal_preserves_existing_sources() {
         let h = TestHarness::in_memory();
         let key = StorageKey::lesson(&h.ctx, "active", "les-presrvsg");
-        let yaml = format!(
-            "---\n\
+        let yaml = "---\n\
              id: les-presrvsg\n\
              description: \"test\"\n\
              status: active\n\
@@ -611,8 +612,7 @@ mod tests {
              thumbs_down_count: 0\n\
              external_signal_sources: [\"user_thumbs_up\"]\n\
              ---\n\
-             body\n"
-        );
+             body\n";
         h.storage.put(&key, _Bytes::from(yaml)).await.unwrap();
         let updated = record_signal(
             &h.ctx,

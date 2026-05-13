@@ -1,5 +1,12 @@
 //! Cross-process advisory file locking.
 //!
+//! **Phase A C6: this module is DEPRECATED.** The canonical sidecar
+//! flock helper now lives at `crate::engine::storage::lock::with_sidecar_lock`
+//! (Day 16b C2 lift). This module stays only because the deprecated
+//! sync `lessons::signals::record_sentiment_signal` still consumes it.
+//! Phase F or G retires this file alongside the sync wrapper — at that
+//! point `engine::storage::lock` is the single source of truth.
+//!
 //! Wraps `fd-lock` so callers don't have to think about the underlying
 //! syscall surface. Locks are released when the returned guard drops.
 //! Use `with_lock` for scoped read-modify-write.
@@ -25,6 +32,12 @@ use fd_lock::RwLock;
 
 /// Compute the sidecar lock file path for a given lesson file.
 /// `~/.loop/lessons/active/les-abc.md` → `~/.loop/lessons/active/.les-abc.md.lock`
+///
+/// Phase A C6: DEPRECATED — retires alongside `with_lock` in Phase F or G.
+#[deprecated(
+    since = "0.0.1-phase-a",
+    note = "Use storage::lock::with_sidecar_lock (Day 16b). Retires in Phase F/G with the sync record_sentiment_signal wrapper."
+)]
 pub fn sidecar_lock_path(target: &Path) -> Result<PathBuf> {
     let parent = target
         .parent()
@@ -43,10 +56,19 @@ pub fn sidecar_lock_path(target: &Path) -> Result<PathBuf> {
 /// The lock guards the LOGICAL operation on `target` — even though the
 /// flock is on `<target>.lock` (a separate, stable inode), every caller
 /// using `with_lock` serializes through the same kernel-level mutex.
+///
+/// Phase A C6: DEPRECATED. Use `storage::lock::with_sidecar_lock` (Day
+/// 16b). This helper retires alongside `record_sentiment_signal` in
+/// Phase F or G.
+#[deprecated(
+    since = "0.0.1-phase-a",
+    note = "Use storage::lock::with_sidecar_lock (Day 16b). Retires in Phase F/G with the sync record_sentiment_signal wrapper."
+)]
 pub fn with_lock<F, T>(target: &Path, f: F) -> Result<T>
 where
     F: FnOnce() -> Result<T>,
 {
+    #[allow(deprecated)]
     let lock_path = sidecar_lock_path(target)?;
     let file = OpenOptions::new()
         .read(true)
@@ -63,6 +85,9 @@ where
 }
 
 #[cfg(test)]
+// Internal tests exercise the deprecated functions to verify backward
+// compat through Phase A. Phase F/G retires both.
+#[allow(deprecated)]
 mod tests {
     use super::*;
     use std::sync::{

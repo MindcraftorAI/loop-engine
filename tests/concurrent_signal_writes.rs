@@ -1,4 +1,4 @@
-//! Concurrency test for record_sentiment_signal.
+//! Concurrency test for record_sentiment_signal (legacy sync wrapper).
 //!
 //! Spawns multiple threads that each call record_sentiment_signal on the
 //! SAME lesson concurrently. Verifies:
@@ -10,6 +10,13 @@
 //! at the same instant the TS MCP server is. fd_lock is process-level, so
 //! threads here exercise the same code path. A real two-process test
 //! would need a separate binary; this is the in-crate equivalent.
+//!
+//! Phase A C6: `record_sentiment_signal` is `#[deprecated]` — this
+//! legacy concurrency test stays as a backward-compat regression. The
+//! async equivalent (`record_signal` with bounded CAS) has its own
+//! parallel-safety test in `engine::lessons::signals` (Phase A C5).
+
+#![allow(deprecated)]
 
 use std::sync::{Mutex, OnceLock};
 use std::thread;

@@ -20,5 +20,14 @@ pub mod loader;
 pub mod lock;
 pub mod signals;
 
-pub use loader::{get_lesson_by_id, LessonFullContent, LoadedLesson};
-pub use signals::{record_sentiment_signal, SignalPolarity};
+// Canonical async API (Phase A C4 + C5):
+pub use loader::{get_by_id, LessonFullContent, LoadedLesson};
+pub use signals::{record_signal, SignalPolarity};
+
+// Deprecated sync wrappers — retained for backward compat through Phase
+// A. Retire in Phase F or G when the daemon binary's wiring is fully
+// async. The re-exports themselves carry the deprecation note.
+#[allow(deprecated)]
+pub use loader::get_lesson_by_id;
+#[allow(deprecated)]
+pub use signals::record_sentiment_signal;
