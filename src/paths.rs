@@ -11,6 +11,12 @@ use anyhow::{anyhow, Result};
 
 pub const LOOP_HOME_ENV: &str = "LOOP_HOME";
 
+/// Shared mutex for tests that mutate `LOOP_HOME` (or any env var). All
+/// such tests across the crate join this mutex so cargo's parallel
+/// runner doesn't race the env state. Public-to-tests-only.
+#[cfg(test)]
+pub static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Resolve LOOP_HOME — env var if set and non-empty, else `~/.loop`.
 pub fn loop_home() -> Result<PathBuf> {
     if let Ok(value) = env::var(LOOP_HOME_ENV) {
@@ -48,6 +54,17 @@ pub fn lessons_dir() -> Result<PathBuf> {
     Ok(loop_home()?.join("lessons"))
 }
 
+/// Status-specific subdirectories per ADR-0010 ("status-as-directory").
+/// Directory is the authoritative source of truth for a lesson's status;
+/// frontmatter `status` is portability metadata.
+pub fn lessons_status_dir(status: &str) -> Result<PathBuf> {
+    Ok(lessons_dir()?.join(status))
+}
+
+/// All 5 lesson status directory names in canonical order.
+pub const LESSON_STATUS_DIRS: &[&str] =
+    &["pending", "active", "promoted", "discarded", "superseded"];
+
 /// `~/.claude/projects/` — Claude Code project transcript root.
 pub fn claude_projects_dir() -> Result<PathBuf> {
     let home = dirs::home_dir().ok_or_else(|| anyhow!("could not determine home directory"))?;
@@ -64,11 +81,8 @@ pub fn ensure_loop_dirs() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use super::ENV_LOCK;
     use super::*;
-    use std::sync::Mutex;
-
-    // Serialize tests that mutate LOOP_HOME — env access isn't thread-safe.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn loop_home_honors_env() {

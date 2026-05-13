@@ -52,6 +52,10 @@ dirs = "6"
 # Unix primitives (PID probing, signals)
 libc = "0.2"
 
+# Advisory cross-process file lock (flock on Unix, LockFile on Windows).
+# Used to coordinate lesson-file writes with the TS MCP server. MIT/Apache.
+fd-lock = "4"
+
 [dev-dependencies]
 tokio = { version = "1", features = ["test-util"] }
 tempfile = "3"

@@ -270,12 +270,9 @@ mod tests {
     /// own process and checking that pre_detach_checks errors).
     #[test]
     fn pre_detach_checks_refuses_when_live_daemon_present() {
-        // Use a temp LOOP_HOME so we don't clobber the user's real dir.
+        let _g = paths::ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let dir = TempDir::new().unwrap();
         let original = std::env::var(paths::LOOP_HOME_ENV).ok();
-        // SAFETY: tests in this module that touch LOOP_HOME serialize via
-        // the ENV_LOCK in paths::tests; this test doesn't currently
-        // contend but the convention is preserved.
         unsafe {
             std::env::set_var(paths::LOOP_HOME_ENV, dir.path());
         }
@@ -311,6 +308,7 @@ mod tests {
     /// (one pointing at a PID that no longer exists).
     #[test]
     fn write_pid_file_overwrites_stale() {
+        let _g = paths::ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let dir = TempDir::new().unwrap();
         let original = std::env::var(paths::LOOP_HOME_ENV).ok();
         unsafe {
