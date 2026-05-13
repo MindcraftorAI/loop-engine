@@ -45,6 +45,10 @@ pub enum Hazard {
     PrivacyConcern,
     /// Classifier deemed the input out of distribution.
     OutOfDistribution,
+    /// The signal is directed at the user themselves (self-frustration,
+    /// self-praise) rather than at a loaded item — attribution would
+    /// be incorrect. Day 16a addition per OQ-D16a-1 (TS port fidelity).
+    SelfDirected,
 }
 
 // =====================================================================

@@ -14,12 +14,19 @@
 
 pub mod attribution;
 pub mod classifier;
+pub mod orchestrator;
 pub mod pretrigger;
+pub mod signals;
 pub mod types;
 
 pub use attribution::{attribute_signal, attribute_signal_with_fallback, Attribution};
 pub use classifier::{ClassifierError, SentimentClassifier};
+pub use orchestrator::{Orchestrator, OrchestratorConfig, SessionPhase, SessionState};
 pub use pretrigger::Pretrigger;
+pub use signals::{
+    AbstainReason, LoggingSignalWriter, OrchestratorOutput, SentimentSignal, SignalWriteError,
+    SignalWriter,
+};
 pub use types::{
     AttributionConfidence, AttributionMethod, CalibratedConfidence, ClassificationRequest,
     ClassifierConfidence, Hazard, ItemClassification, LoadedItem, LoadedItemId, LoadedItemKind,

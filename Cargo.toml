@@ -83,6 +83,16 @@ futures = { version = "0.3", default-features = false, features = ["std", "async
 # already transitive via `tracing-subscriber`). MIT/Apache.
 regex = "1"
 
+# Per-session keyed mutable state for the sentiment orchestrator.
+# Day 16a D6: short critical sections, no fairness need; DashMap is
+# the textbook fit. MIT.
+dashmap = "6"
+
+# Bridges `tokio::sync::mpsc::UnboundedReceiver` to `Stream` for the
+# JsonlWatcher → EventSource impl. Already transitive of tokio-util;
+# promoted to direct dep for clarity. MIT.
+tokio-stream = "0.1"
+
 [features]
 # Test fixtures: ships `MockSentimentClassifier` for cross-crate test
 # code (integration tests, future external consumers). Production
