@@ -78,8 +78,13 @@ pub(crate) mod sealed {
 // =====================================================================
 
 /// Test/development fixture. Returns canned [`RawClassification`]s in
-/// the order they were enqueued; once the queue is exhausted, returns
-/// `RawClassification::abstain()`.
+/// the order they were enqueued; **once the queue is exhausted, returns
+/// `RawClassification::abstain()` indefinitely** — the consumer cannot
+/// distinguish "queue ran out" from "canned abstain." Tests that need
+/// to assert N expected classifications should check `call_count` to
+/// confirm they didn't silently fall through into the abstain fallback.
+///
+/// (Day 15 audit m3: documented to avoid Day 16 test-misread surprise.)
 ///
 /// Builder-chain API (per OQ2):
 /// ```ignore

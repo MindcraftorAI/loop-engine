@@ -26,6 +26,16 @@ use super::types::{
     AttributionConfidence, AttributionMethod, LoadedItem, LoadedItemId, RecentTurn, TurnRole,
 };
 
+/// Minimum classifier-judge confidence for Pass 4 (Salience) to fire.
+///
+/// Locked by [`docs/research/sentiment-design-rules.md`] — the rule is
+/// "classifier-judged salience is only trustworthy at high self-reported
+/// confidence." Below this threshold, attribute_signal abstains rather
+/// than guessing.
+///
+/// Day 15 audit M5: extracted from inline `0.8` magic number.
+const PASS4_MIN_CONFIDENCE: f32 = 0.8;
+
 /// Output of [`attribute_signal`] and [`attribute_signal_with_fallback`].
 ///
 /// Per learn-notes D4 / pre-research Q4 audit-smells: **abstain is
@@ -75,8 +85,9 @@ where
     let candidates = recently_referenced_items(loaded_items, recent_turns);
     if (2..=5).contains(&candidates.len()) {
         if let Some((item_id, conf)) = fallback(&candidates) {
-            // Threshold: the judge must be ≥0.8 confident or we abstain.
-            if conf.value() >= 0.8 {
+            // Threshold: the judge must clear `PASS4_MIN_CONFIDENCE`
+            // (0.8) or we abstain rather than guess.
+            if conf.value() >= PASS4_MIN_CONFIDENCE {
                 return Some(Attribution {
                     item_id,
                     method: AttributionMethod::Salience,

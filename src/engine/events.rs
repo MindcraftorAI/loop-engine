@@ -6,26 +6,15 @@
 //! (Claude Code JSONL, MCP RPC, HTTP webhooks) into [`EngineEvent`]
 //! variants.
 //!
-//! **Day 14 status (audit-closed):** trait + types defined. No impl
-//! ships yet; this is documented decision-deferral (see
-//! `docs/research/day-14-post-research.md`).
+//! [`EngineEvent::UserTurn`] field set was locked Day 15 (D1):
+//! - `parent_event_uuid: Option<String>` for correction-window mining
+//! - `host_version: Option<HostVersion>` for daemon-version tripwire (Day 17)
+//! - `project_tag: Option<ProjectTag>` for project-scoped routing (Phase C)
 //!
-//! Why deferred: [`EngineEvent::UserTurn`] currently carries the host-
-//! agnostic minimum (`session_id`, `event_uuid`, `text`, `timestamp`,
-//! `cwd`). The Claude Code adapter's existing `WatcherEvent::UserTurn`
-//! also carries `parent_uuid`, `cc_version`, `git_branch` — fields the
-//! Day 15 orchestrator will need (correction-window mining wants
-//! parent_uuid; daemon-version tripwire wants cc_version; project
-//! routing may want git_branch). Picking the right shape (flat fields
-//! vs. opaque `HostExtras` sub-struct vs. host-specific event variant)
-//! requires the orchestrator's consumption requirements as input —
-//! deciding without them violates the "no guesswork" rule
-//! ([[feedback-rust-idiomatic-refactor]]).
-//!
-//! Day 15 plan: pre-research nails down `EngineEvent::UserTurn`'s final
-//! shape; build phase refactors `JsonlWatcher` to impl `EventSource`
-//! returning the curated `EngineEvent` AND ships the consuming
-//! orchestrator on top.
+//! No EventSource impl ships yet — `JsonlWatcher::EventSource` lands
+//! in Day 16 as part of the orchestrator wiring. Day 15 pure-logic
+//! sentiment code (pretrigger / classifier trait / attribution) ships
+//! against the locked event shape.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -109,6 +98,12 @@ impl HostVersion {
     }
 }
 
+impl AsRef<str> for HostVersion {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
 impl std::fmt::Display for HostVersion {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.0)
@@ -131,6 +126,12 @@ impl ProjectTag {
         Self(t.into())
     }
     pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl AsRef<str> for ProjectTag {
+    fn as_ref(&self) -> &str {
         &self.0
     }
 }

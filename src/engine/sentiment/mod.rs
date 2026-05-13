@@ -23,5 +23,5 @@ pub use pretrigger::Pretrigger;
 pub use types::{
     AttributionConfidence, AttributionMethod, CalibratedConfidence, ClassificationRequest,
     ClassifierConfidence, Hazard, ItemClassification, LoadedItem, LoadedItemId, LoadedItemKind,
-    Polarity, RawClassification, RecentTurn,
+    Polarity, RawClassification, RecentTurn, TurnRole,
 };

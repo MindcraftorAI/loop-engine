@@ -93,6 +93,10 @@ test-fixtures = []
 tokio = { version = "1", features = ["test-util"] }
 tempfile = "3"
 dirs = "6"
+# Self-reference enables `--features test-fixtures` in tests/ so
+# integration tests can use `MockSentimentClassifier` etc. Locked
+# Day 15 D13; gap caught in Day 15 audit M3.
+loop-daemon = { path = ".", features = ["test-fixtures"] }
 
 [profile.release]
 strip = "symbols"

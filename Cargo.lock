@@ -565,6 +565,7 @@ dependencies = [
  "fd-lock",
  "futures",
  "libc",
+ "loop-daemon",
  "notify",
  "regex",
  "serde",

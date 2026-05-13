@@ -143,6 +143,12 @@ impl LoadedItemId {
     }
 }
 
+impl AsRef<str> for LoadedItemId {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
 impl std::fmt::Display for LoadedItemId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.0)
@@ -216,6 +222,11 @@ pub struct ClassificationRequest {
 // =====================================================================
 
 /// Per-item classification result.
+///
+/// (Day 15 audit m8: derives `Eq` + `Hash` even though `ClassifierConfidence`
+/// is `f32`-backed — `f32` is not `Eq`/`Hash` so we keep `PartialEq` only
+/// for the struct. The audit suggestion was incorrect for the `f32`-backed
+/// case; leaving as `PartialEq` is intentional.)
 #[derive(Debug, Clone, PartialEq)]
 pub struct ItemClassification {
     pub item_id: LoadedItemId,
