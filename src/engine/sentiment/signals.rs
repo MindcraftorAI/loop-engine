@@ -178,11 +178,30 @@ impl SignalWriter for LoggingSignalWriter {
 // =====================================================================
 
 /// Persists [`SentimentSignal`]s via the engine's [`Storage`] abstraction.
-/// Each signal lands at `StorageKey::sentiment_signal(ctx, session, event_uuid)`.
 ///
-/// Day 16b scope: one signal per file. Day 17 will add lesson-array
-/// aggregation (the per-(session, lesson) signals get rolled into the
-/// lesson YAML's signals array).
+/// Phase A C7 — two writes per signal:
+///  1. **Standalone file** at `signals/<session>/<event-uuid>.yaml` —
+///     per-event audit-trail ledger (Day 16b behavior preserved). The
+///     standalone file is rendered via `render_signal_yaml` and carries
+///     the rich signal data (polarity, confidence, attribution method,
+///     hazards, etc.) that the lesson YAML's signal array does NOT.
+///  2. **Lesson append** via `lessons::record_signal` — adds the
+///     source tag (`sentiment_positive` / `sentiment_negative`) to the
+///     lesson's `external_signal_sources: Vec<String>`. This is the
+///     deduplicated source-tag set the promotion gate consumes
+///     (TS-parity per Phase A D3 / OQ-A7).
+///
+/// Polarity translation (D3 + OQ-A?):
+/// - `Polarity::Positive` → `SignalPolarity::Positive` → tag `sentiment_positive`
+/// - `Polarity::Negative` → `SignalPolarity::Negative` → tag `sentiment_negative`
+/// - `Polarity::Neutral` → no aggregation (standalone write still happens
+///   for audit trail, but the lesson's source set is not updated —
+///   neutral isn't a directional signal the promotion gate cares about)
+///
+/// Failure handling: the standalone write happens FIRST so the audit
+/// trail is preserved even if aggregation fails. Aggregation failures
+/// (LessonNotFound, CAS budget exhaustion, etc.) bubble as
+/// `SignalWriteError::backend` per Phase A OQ-A3.
 #[derive(Debug, Clone)]
 pub struct StorageBackedSignalWriter {
     storage: Arc<dyn Storage>,
@@ -201,21 +220,49 @@ impl SignalWriter for StorageBackedSignalWriter {
         ctx: &Context,
         signal: &SentimentSignal,
     ) -> Result<(), SignalWriteError> {
-        let key = StorageKey::sentiment_signal(
+        // === Write 1: standalone audit-trail file (always) ===
+        let standalone_key = StorageKey::sentiment_signal(
             ctx,
             ctx.session_id.as_str(),
             &signal.source_event_uuid,
         );
         let body = render_signal_yaml(signal);
-        // Create-only: one file per emitted signal. If we ever see a
-        // duplicate event_uuid the put_if_version with expected_version
-        // = None will return Ok(false) — we treat that as success-with-
-        // dedup (idempotent emit).
+        // Create-only: dedupe-as-success per Phase A OQ-A2 — duplicate
+        // event_uuid returns Ok(false), which is fine; we treat the
+        // first write as canonical and idempotently noop on the second.
         let _ok = self
             .storage
-            .put_if_version(&key, Bytes::from(body), None)
+            .put_if_version(&standalone_key, Bytes::from(body), None)
             .await
             .map_err(SignalWriteError::backend)?;
+
+        // === Write 2: lesson-array aggregation (Phase A C7) ===
+        let agg_polarity = match signal.polarity {
+            crate::engine::sentiment::types::Polarity::Positive => {
+                Some(crate::engine::lessons::SignalPolarity::Positive)
+            }
+            crate::engine::sentiment::types::Polarity::Negative => {
+                Some(crate::engine::lessons::SignalPolarity::Negative)
+            }
+            // Neutral signals don't update the lesson's source set —
+            // they're not directional and the promotion gate ignores them.
+            crate::engine::sentiment::types::Polarity::Neutral => None,
+        };
+        if let Some(polarity) = agg_polarity {
+            crate::engine::lessons::record_signal(
+                ctx,
+                self.storage.as_ref(),
+                signal.item_id.as_str(),
+                polarity,
+            )
+            .await
+            .map_err(|e| {
+                SignalWriteError::backend(std::io::Error::other(format!(
+                    "lesson aggregation failed for {}: {e}",
+                    signal.item_id
+                )))
+            })?;
+        }
         Ok(())
     }
 }
@@ -407,15 +454,39 @@ mod tests {
 
     use crate::engine::storage::MemoryStorage;
 
+    /// Seed a minimal valid lesson so the C7 aggregation path can find
+    /// it. Tests that don't pre-seed will get LessonNotFound bubbled
+    /// out of `StorageBackedSignalWriter::record` (which is the
+    /// intentional Phase A behavior per OQ-A3).
+    async fn seed_minimum_lesson(storage: &Arc<dyn Storage>, ctx: &Context, id: &str) {
+        let key = StorageKey::lesson(ctx, "active", id);
+        let yaml = format!(
+            "---\n\
+             id: {id}\n\
+             description: \"test\"\n\
+             status: active\n\
+             created_at: \"2026-05-13T00:00:00.000Z\"\n\
+             applied_count: 0\n\
+             thumbs_up_count: 0\n\
+             thumbs_down_count: 0\n\
+             external_signal_sources: []\n\
+             ---\n\
+             body\n"
+        );
+        storage.put(&key, Bytes::from(yaml)).await.unwrap();
+    }
+
     #[tokio::test]
     async fn storage_backed_writer_persists_signal_to_storage() {
         let storage: Arc<dyn Storage> = Arc::new(MemoryStorage::default());
         let writer = StorageBackedSignalWriter::new(storage.clone());
         let ctx = Context::single_user_local();
+        seed_minimum_lesson(&storage, &ctx, "les-quokka-special").await;
         let signal = fake_signal("les-quokka-special");
 
         writer.record(&ctx, &signal).await.unwrap();
 
+        // Write 1: standalone audit-trail file.
         let key = StorageKey::sentiment_signal(
             &ctx,
             ctx.session_id.as_str(),
@@ -424,11 +495,95 @@ mod tests {
         let stored = storage.get(&key).await.unwrap().unwrap();
         let body = std::str::from_utf8(&stored).unwrap();
         assert!(body.contains("item_id: les-quokka-special"));
-        // Phase A C2: Display impls — snake_case, schema-stable.
         assert!(body.contains("polarity: positive"));
         assert!(body.contains("attribution_method: direct_mention"));
         assert!(body.contains("detected_hazards: [low_confidence]"));
         assert!(body.contains("source_event_uuid: evt-1"));
+
+        // Write 2: lesson aggregation appended `sentiment_positive`.
+        let lesson = crate::engine::lessons::get_by_id(
+            &ctx,
+            storage.as_ref(),
+            "les-quokka-special",
+        )
+        .await
+        .unwrap()
+        .expect("lesson should still exist");
+        assert_eq!(
+            lesson.frontmatter.external_signal_sources,
+            vec!["sentiment_positive".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn storage_backed_writer_aggregates_negative_polarity() {
+        let storage: Arc<dyn Storage> = Arc::new(MemoryStorage::default());
+        let writer = StorageBackedSignalWriter::new(storage.clone());
+        let ctx = Context::single_user_local();
+        seed_minimum_lesson(&storage, &ctx, "les-neg-agg").await;
+        let mut signal = fake_signal("les-neg-agg");
+        signal.polarity = Polarity::Negative;
+
+        writer.record(&ctx, &signal).await.unwrap();
+
+        let lesson = crate::engine::lessons::get_by_id(
+            &ctx,
+            storage.as_ref(),
+            "les-neg-agg",
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            lesson.frontmatter.external_signal_sources,
+            vec!["sentiment_negative".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn storage_backed_writer_skips_aggregation_for_neutral_polarity() {
+        let storage: Arc<dyn Storage> = Arc::new(MemoryStorage::default());
+        let writer = StorageBackedSignalWriter::new(storage.clone());
+        let ctx = Context::single_user_local();
+        seed_minimum_lesson(&storage, &ctx, "les-neut-agg").await;
+        let mut signal = fake_signal("les-neut-agg");
+        signal.polarity = Polarity::Neutral;
+
+        writer.record(&ctx, &signal).await.unwrap();
+
+        let key = StorageKey::sentiment_signal(
+            &ctx,
+            ctx.session_id.as_str(),
+            &signal.source_event_uuid,
+        );
+        assert!(storage.get(&key).await.unwrap().is_some());
+        let lesson = crate::engine::lessons::get_by_id(
+            &ctx,
+            storage.as_ref(),
+            "les-neut-agg",
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(lesson.frontmatter.external_signal_sources.is_empty());
+    }
+
+    #[tokio::test]
+    async fn storage_backed_writer_bubbles_when_lesson_missing() {
+        // OQ-A3: aggregation failure on LessonNotFound bubbles as
+        // SignalWriteError. Standalone file IS still written.
+        let storage: Arc<dyn Storage> = Arc::new(MemoryStorage::default());
+        let writer = StorageBackedSignalWriter::new(storage.clone());
+        let ctx = Context::single_user_local();
+        let signal = fake_signal("les-nofile99");
+        let result = writer.record(&ctx, &signal).await;
+        assert!(matches!(result, Err(SignalWriteError::Backend(_))));
+        let key = StorageKey::sentiment_signal(
+            &ctx,
+            ctx.session_id.as_str(),
+            &signal.source_event_uuid,
+        );
+        assert!(storage.get(&key).await.unwrap().is_some());
     }
 
     #[test]
@@ -458,11 +613,15 @@ mod tests {
 
     #[tokio::test]
     async fn storage_backed_writer_dedups_on_same_event_uuid() {
-        // Same source_event_uuid → second record() is a no-op (put_if_version
+        // Same source_event_uuid → standalone-file dedup (put_if_version
         // with expected=None returns Ok(false) when file exists).
+        // Phase A C7: both signal IDs need lessons seeded so the
+        // aggregation path doesn't bubble LessonNotFound.
         let storage: Arc<dyn Storage> = Arc::new(MemoryStorage::default());
         let writer = StorageBackedSignalWriter::new(storage.clone());
         let ctx = Context::single_user_local();
+        seed_minimum_lesson(&storage, &ctx, "les-a").await;
+        seed_minimum_lesson(&storage, &ctx, "les-b").await;
         let first = fake_signal("les-a");
         let mut second = fake_signal("les-b");
         second.source_event_uuid = first.source_event_uuid.clone();
