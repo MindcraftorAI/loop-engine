@@ -13,7 +13,9 @@ use std::io;
 
 use thiserror::Error;
 
+use crate::engine::embedding::error::EmbeddingError;
 use crate::engine::lessons::gate::BlockReason;
+use crate::engine::llm::error::LlmError;
 use crate::engine::storage::StorageError;
 
 #[derive(Debug, Error)]
@@ -54,6 +56,25 @@ pub enum EngineError {
     /// Caller-side validation error.
     #[error("manifest invalid status: {status}")]
     ManifestInvalidStatus { status: String },
+
+    /// LLM call failure surfaced from any [`crate::engine::llm::LlmClient`]
+    /// adapter. Phase D D-D4: typed enum for caller pattern-matching
+    /// (rate-limit vs invalid-output vs validation-failed all matter
+    /// to engine code).
+    #[error("llm error: {0}")]
+    Llm(#[source] LlmError),
+
+    /// Embedding call failure. Phase D / E surface.
+    #[error("embedding error: {0}")]
+    Embedding(#[source] EmbeddingError),
+
+    /// `narrative::generate` rejected the LLM output as too thin to
+    /// ground (the model returned a refusal indicating the inputs
+    /// don't justify any concrete causal narrative). Distinct from
+    /// `Llm(LlmError::ValidationFailed)` because there's nothing
+    /// wrong with the LLM — there's nothing to say.
+    #[error("narrative refused: insufficient context to ground a causal narrative")]
+    NarrativeInsufficientContext,
 
     /// Promotion gate blocked the requested promotion. Added preemptively
     /// in Phase B C-B2 so Phase G `transitions::promote` has a typed
