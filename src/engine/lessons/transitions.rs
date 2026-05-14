@@ -169,6 +169,66 @@ async fn decrement_user_lesson_citations(
     }
 }
 
+/// M-G4 helper: CAS-RMW the OLD key through the gate check + move.
+/// Sentinel-writes the same bytes back to detect concurrent mutation.
+/// If the version changed (someone bumped thumbs_down etc), re-loop;
+/// re-run the gate with the new bytes; bounded by
+/// `TRANSITION_CAS_MAX_RETRIES`.
+async fn promote_cas_loop(
+    storage: &dyn Storage,
+    id: &str,
+    old_key: &StorageKey,
+    new_key: &StorageKey,
+    config: &PromotionConfig,
+    now: DateTime<Utc>,
+) -> Result<(LessonFrontmatter, String), EngineError> {
+    for _attempt in 0..TRANSITION_CAS_MAX_RETRIES {
+        let Some((bytes, version)) = storage.get_with_version(old_key).await? else {
+            return Err(EngineError::LessonNotFound { id: id.to_string() });
+        };
+        let content = std::str::from_utf8(&bytes)
+            .map_err(|e| EngineError::Parse(format!("non-utf8 lesson bytes for {old_key}: {e}")))?;
+        let split = split_frontmatter_normalized(content)
+            .map_err(|e| EngineError::Parse(format!("split frontmatter {old_key}: {e}")))?;
+        let live_fm = parse_lesson_frontmatter(&split.yaml)
+            .map_err(|e| EngineError::Yaml(e.into()))?;
+        let metadata = storage
+            .metadata(old_key)
+            .await?
+            .ok_or_else(|| EngineError::LessonNotFound { id: id.to_string() })?;
+        match check_promotion_gate(&live_fm, &metadata, config, now) {
+            GateDecision::Block { reasons } => {
+                return Err(EngineError::PromotionBlocked { reasons });
+            }
+            GateDecision::Promote { .. } => {}
+        }
+        // Sentinel-CAS the OLD key to its current value — if someone
+        // raced us we lose, re-loop, re-run the gate. If we win, the
+        // move helper's create-only CAS at new_key is the second guard.
+        let sentinel_written = storage
+            .put_if_version(old_key, Bytes::from(bytes.to_vec()), Some(&version))
+            .await?;
+        if !sentinel_written {
+            continue;
+        }
+        let mut fm = live_fm.clone();
+        if fm.promotion_eligible_at.is_none() {
+            fm.promotion_eligible_at = Some(now_iso(now));
+        }
+        fm.status = LessonStatus::Promoted;
+        fm.updated_at = Some(now_iso(now));
+        let new_yaml = serialize_lesson_frontmatter(&fm);
+        let body = split.body.trim_start_matches('\n').to_string();
+        let new_bytes = Bytes::from(combine_frontmatter(&new_yaml, &body));
+        move_lesson_file(storage, old_key, new_key, new_bytes, id).await?;
+        return Ok((fm, body));
+    }
+    Err(EngineError::CasContended {
+        key: old_key.as_str().to_string(),
+        retries: TRANSITION_CAS_MAX_RETRIES,
+    })
+}
+
 /// D-G3: `promote_lesson` enforces the gate internally and stamps
 /// `promotion_eligible_at` if not already set. On `Block`, returns
 /// `EngineError::PromotionBlocked`. On `Promote`, moves the lesson
@@ -180,34 +240,15 @@ pub async fn promote(
     config: &PromotionConfig,
     now: DateTime<Utc>,
 ) -> Result<LoadedLesson, EngineError> {
-    let loaded = get_by_id(ctx, storage, id)
+    // M-G4 fix: CAS-RMW loop — gate re-runs on every iteration so a
+    // concurrent thumbs_down between the gate check and the move can't
+    // smuggle a now-blocked lesson through.
+    let initial = get_by_id(ctx, storage, id)
         .await?
         .ok_or_else(|| EngineError::LessonNotFound { id: id.to_string() })?;
-    let old_key = StorageKey::lesson(ctx, &loaded.status_dir, id);
-    // Re-read fresh metadata so the gate sees the hardened on-disk
-    // birthtime (TS-parity: max of birthtime/mtime/frontmatter.created_at).
-    let metadata = storage
-        .metadata(&old_key)
-        .await?
-        .ok_or_else(|| EngineError::LessonNotFound { id: id.to_string() })?;
-    match check_promotion_gate(&loaded.frontmatter, &metadata, config, now) {
-        GateDecision::Block { reasons } => {
-            return Err(EngineError::PromotionBlocked { reasons })
-        }
-        GateDecision::Promote { .. } => {}
-    }
-    // CAS-RMW: stamp promotion_eligible_at if not already set, then move.
-    let mut fm = loaded.frontmatter.clone();
-    if fm.promotion_eligible_at.is_none() {
-        fm.promotion_eligible_at = Some(now_iso(now));
-    }
-    fm.status = LessonStatus::Promoted;
-    fm.updated_at = Some(now_iso(now));
-    let new_yaml = serialize_lesson_frontmatter(&fm);
-    let body = loaded.body.trim_start_matches('\n').to_string();
-    let new_bytes = Bytes::from(combine_frontmatter(&new_yaml, &body));
+    let old_key = StorageKey::lesson(ctx, &initial.status_dir, id);
     let new_key = StorageKey::lesson(ctx, "promoted", id);
-    move_lesson_file(storage, &old_key, &new_key, new_bytes, id).await?;
+    let (fm, body) = promote_cas_loop(storage, id, &old_key, &new_key, config, now).await?;
     // D-G6: best-effort skill lesson-history append (only when the
     // lesson has both a target_skill AND a causal_narrative).
     if let (Some(skill_id), Some(cn)) = (&fm.target_skill, &fm.causal_narrative) {
@@ -218,24 +259,36 @@ pub async fn promote(
             yaml_inline_scalar(&cn.trigger),
             fm.authored_by.as_str(),
         );
-        let history_key = StorageKey::skill_history(ctx, skill_id);
-        let existing = storage.get(&history_key).await.ok().flatten();
-        let new_contents = match existing {
-            Some(b) => {
-                let mut s = String::from_utf8_lossy(&b).into_owned();
-                if !s.ends_with('\n') {
-                    s.push('\n');
-                }
-                s.push_str(&entry);
-                s
-            }
-            None => entry,
-        };
-        if let Err(e) = storage.put(&history_key, Bytes::from(new_contents)).await {
+        // M-G3 fix: D-G6 sub-clause — skip if the skill record doesn't
+        // exist. Orphan history is not worth keeping; the audit trail
+        // assumes a real skill at the corresponding directory.
+        let skill_key = StorageKey::skill(ctx, skill_id);
+        let skill_exists = storage.get(&skill_key).await.ok().flatten().is_some();
+        if !skill_exists {
             warn!(
-                lesson = %id, skill = %skill_id, error = %e,
-                "promote: best-effort lesson-history append failed"
+                lesson = %id, skill = %skill_id,
+                "promote: target_skill points at non-existent skill; skipping audit append"
             );
+        } else {
+            let history_key = StorageKey::skill_history(ctx, skill_id);
+            let existing = storage.get(&history_key).await.ok().flatten();
+            let new_contents = match existing {
+                Some(b) => {
+                    let mut s = String::from_utf8_lossy(&b).into_owned();
+                    if !s.ends_with('\n') {
+                        s.push('\n');
+                    }
+                    s.push_str(&entry);
+                    s
+                }
+                None => entry,
+            };
+            if let Err(e) = storage.put(&history_key, Bytes::from(new_contents)).await {
+                warn!(
+                    lesson = %id, skill = %skill_id, error = %e,
+                    "promote: best-effort lesson-history append failed"
+                );
+            }
         }
     }
     Ok(LoadedLesson {
@@ -339,12 +392,19 @@ pub async fn supersede(
     // not lead back to old_id within the depth cap.
     let mut chain = vec![new_id.to_string()];
     let mut cursor = new_id.to_string();
+    let mut walked_to_end = false;
     for _ in 0..SUPERSEDE_CYCLE_DEPTH_CAP {
         let next = match get_by_id(ctx, storage, &cursor).await? {
             Some(l) => l.frontmatter.superseded_by.clone(),
-            None => break,
+            None => {
+                walked_to_end = true;
+                break;
+            }
         };
-        let Some(next_id) = next else { break };
+        let Some(next_id) = next else {
+            walked_to_end = true;
+            break;
+        };
         if next_id == old_id {
             chain.push(next_id);
             return Err(EngineError::LessonSupersedeInvalid {
@@ -354,6 +414,15 @@ pub async fn supersede(
         }
         chain.push(next_id.clone());
         cursor = next_id;
+    }
+    // M-G1 fix: depth-cap exhaustion without reaching chain end is
+    // itself a cycle signal — refuse rather than silently proceed.
+    // Matches Phase E2 compression-cycle precedent.
+    if !walked_to_end {
+        return Err(EngineError::LessonSupersedeInvalid {
+            id: old_id.to_string(),
+            reason: SupersedeBlockReason::CycleDetected { chain },
+        });
     }
     // Load the old lesson + apply immunity guard.
     let loaded = get_by_id(ctx, storage, old_id)
@@ -692,6 +761,97 @@ mod tests {
                 ..
             }) => {}
             other => panic!("expected CycleDetected, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn supersede_user_authored_without_force_refuses() {
+        let h = TestHarness::in_memory();
+        seed_lesson_full(&h, "active", "les-suusr0001", Authorship::User, vec![]).await;
+        seed_lesson_full(&h, "active", "les-sunew0001", Authorship::Llm, vec![]).await;
+        let r = supersede(&h.ctx, h.storage.as_ref(), "les-suusr0001", "les-sunew0001", false, now()).await;
+        assert!(matches!(r, Err(EngineError::UserLessonImmune { .. })));
+    }
+
+    #[tokio::test]
+    async fn supersede_user_authored_with_force_decrements_memory_citations() {
+        // M-G2 fix: the wedge invariant on supersede is symmetric to
+        // discard — user-authored supersede must decrement cited
+        // memories' immunity counters.
+        let h = TestHarness::in_memory();
+        let storage: Arc<dyn Storage> = h.storage.clone();
+        let vidx = HnswVectorIndex::new(4);
+        let mid = MemoryId::new("mem-sudec0001");
+        let emb = MockEmbedder::new(4).with_response(vec![unit_vec(4, 0)]);
+        insert_memory(&h.ctx, storage.as_ref(), &emb, &vidx, mid.clone(), "x", "y", now())
+            .await
+            .unwrap();
+        crate::engine::memory::increment_citation_count(&h.ctx, storage.as_ref(), &mid)
+            .await
+            .unwrap();
+        let pre = crate::engine::memory::get_by_id(&h.ctx, storage.as_ref(), &mid)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(pre.frontmatter.consumed_by_user_lessons, 1);
+        seed_lesson_full(&h, "active", "les-suold0001", Authorship::User, vec![mid.clone()]).await;
+        seed_lesson_full(&h, "active", "les-sunew0002", Authorship::Llm, vec![]).await;
+        supersede(&h.ctx, h.storage.as_ref(), "les-suold0001", "les-sunew0002", true, now())
+            .await
+            .unwrap();
+        let post = crate::engine::memory::get_by_id(&h.ctx, storage.as_ref(), &mid)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            post.frontmatter.consumed_by_user_lessons, 0,
+            "user-authored lesson supersede must decrement cited memories (wedge invariant)"
+        );
+    }
+
+    #[tokio::test]
+    async fn supersede_depth_cap_treated_as_cycle() {
+        // M-G1 fix: walking superseded_by past depth cap without
+        // reaching chain end must refuse.
+        let h = TestHarness::in_memory();
+        for i in 0..20 {
+            let next_id = if i < 19 {
+                Some(format!("les-d{:03}", i + 1))
+            } else {
+                Some("les-d000".into())
+            };
+            let fm = LessonFrontmatter {
+                id: format!("les-d{:03}", i),
+                description: "chain".into(),
+                status: LessonStatus::Superseded,
+                created_at: "2026-05-13T00:00:00Z".into(),
+                updated_at: None,
+                target_skill: None,
+                source_feedback_ids: None,
+                applied_count: 0,
+                last_applied_at: None,
+                thumbs_up_count: 0,
+                thumbs_down_count: 0,
+                external_signal_sources: vec![],
+                promotion_eligible_at: None,
+                superseded_by: next_id,
+                superseded_at: Some("2026-05-13T00:00:00Z".into()),
+                ingest_provenance: None,
+                authored_by: Authorship::Llm,
+                causal_narrative: None,
+            };
+            let yaml = serialize_lesson_frontmatter(&fm);
+            let key = StorageKey::lesson(&h.ctx, "superseded", &format!("les-d{:03}", i));
+            h.storage.put(&key, Bytes::from(combine_frontmatter(&yaml, "body\n"))).await.unwrap();
+        }
+        seed_lesson_full(&h, "active", "les-orig00002", Authorship::Llm, vec![]).await;
+        let r = supersede(&h.ctx, h.storage.as_ref(), "les-orig00002", "les-d000", false, now()).await;
+        match r {
+            Err(EngineError::LessonSupersedeInvalid {
+                reason: SupersedeBlockReason::CycleDetected { .. },
+                ..
+            }) => {}
+            other => panic!("expected CycleDetected at depth cap, got {other:?}"),
         }
     }
 

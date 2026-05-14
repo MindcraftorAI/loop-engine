@@ -31,7 +31,14 @@ const LESSON_FILE_EXT: &str = ".md";
 const LESSON_ID_PREFIX: &str = "les-";
 
 /// Lesson plus the parent directory name (= status) it was found in.
+///
+/// `#[non_exhaustive]` — Phase G audit close. Future cycles add fields
+/// (e.g. canonical-id once the multi-tenant rename lands) without
+/// SemVer break. Construct via the loader API or struct-literal with
+/// `..Default::default()` is NOT supported; tests use direct field
+/// init since they're inside the crate.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct LoadedLesson {
     pub path: PathBuf,
     pub status_dir: String,
