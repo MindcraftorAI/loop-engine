@@ -68,8 +68,8 @@ via `#[non_exhaustive]` on all public types.
 ### Wedge defense
 
 Four-layer ratchet (B/E2/F/G) defended end-to-end by:
-- `gate::tests::*` (~20 promotion-gate scenarios)
-- `tests/compression_wedge_e2e.rs` (5 compression-chain tests)
+- `gate::tests::*` (26 promotion-gate scenarios)
+- `tests/compression_wedge_e2e.rs` (7 compression-chain tests)
 - `tests/skill_wedge_e2e.rs` (3 skill-immunity tests)
 - `transitions::tests::*_decrements_memory_citations` (2 lifecycle-
   decrement tests)

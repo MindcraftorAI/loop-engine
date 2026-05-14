@@ -5,7 +5,7 @@ use clap::{Parser, Subcommand};
 #[derive(Debug, Parser)]
 #[command(
     name = "loop-engine",
-    about = "Live verification daemon for Loop — watches Claude Code sessions and emits sentiment signals",
+    about = "loop-engine — cognitive-memory substrate for AI agents (host-adapter daemon)",
     version
 )]
 pub struct Cli {

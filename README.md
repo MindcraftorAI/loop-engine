@@ -41,8 +41,8 @@ whatever capture mechanism you already have.
 
 | Layer | Promise | Source | Defense |
 |-------|---------|--------|---------|
-| **B: Promotion gate** | No self-graded promotions | `src/engine/lessons/gate.rs` | `gate::tests::*` (~20 tests covering tampered age, missing narrative, thumbs-down block, time-floor) |
-| **E2: Memory compression chain** | Citations survive compression — user-cited memories stay reachable through `derived_from` chains | `src/engine/memory/compress.rs` | `tests/compression_wedge_e2e.rs` (5 cross-cutting tests) |
+| **B: Promotion gate** | No self-graded promotions | `src/engine/lessons/gate.rs` | `gate::tests::*` (26 tests covering tampered age, missing narrative, thumbs-down block, time-floor) |
+| **E2: Memory compression chain** | Citations survive compression — user-cited memories stay reachable through `derived_from` chains | `src/engine/memory/compress.rs` | `tests/compression_wedge_e2e.rs` (7 cross-cutting tests) |
 | **F: Skill / persona / team immunity** | User-authored skills citing memories make those memories immune to engine-initiated delete | `src/engine/skills/store.rs` | `tests/skill_wedge_e2e.rs` (3 tests, incl. LLM-authored negative control) |
 | **G: Lesson lifecycle decrement** | Retiring a user-authored lesson releases its slice of memory immunity (symmetric to step F) | `src/engine/lessons/transitions.rs` | `transitions::tests::discard_user_authored_with_force_decrements_memory_citations` + `supersede_user_authored_with_force_decrements_memory_citations` |
 

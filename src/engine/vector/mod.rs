@@ -110,9 +110,9 @@ pub(crate) mod sealed {
     /// cannot implement [`super::VectorIndex`] directly. Monolith
     /// adapters land via the workspace pattern.
     ///
-    /// TODO(Phase H pre-release): same cross-crate sealed-trait
-    /// decision applies as in [`crate::engine::llm::sealed::Sealed`].
-    /// Until resolved, only engine-shipped impls can satisfy this.
+    /// Stabilized per Phase H D-H2: sealed for v1.0. See
+    /// `INTEGRATING.md` for the workspace-pattern integration
+    /// model.
     pub trait Sealed {}
 }
 

@@ -1,13 +1,13 @@
 # Third-Party Licenses
 
-`loop-daemon` includes code cherry-picked from upstream MIT-licensed
+`loop-engine` includes code cherry-picked from upstream MIT-licensed
 projects. Each lifted file carries an SPDX header noting the source and
 upstream copyright. The full license text of each upstream project is
 preserved below as required by MIT terms.
 
 ## Non-MIT/Apache dependencies (SPDX-tracked)
 
-`loop-daemon` follows a strict no-AGPL/GPL/SSPL policy. Most dependencies
+`loop-engine` follows a strict no-AGPL/GPL/SSPL policy. Most dependencies
 are MIT or Apache-2.0 (or dual-licensed). Exceptions are listed below
 with their SPDX identifier and rationale.
 
