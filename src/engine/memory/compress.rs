@@ -346,12 +346,25 @@ fn validate_compressed_invariants(
 }
 
 /// Mint a `MemoryId` for the new compressed memory. Format:
-/// `mem-c-<8-hex-of-now-millis>`. The `-c-` infix marks it as
-/// compressed (purely cosmetic; the engine identifies via
-/// `derived_from.is_empty()`).
-fn mint_compressed_id(now: DateTime<Utc>, _predecessors: &[MemoryId]) -> MemoryId {
+/// `mem-c-<16-hex-of-(timestamp-millis ⊕ DefaultHasher(predecessors))>`.
+/// The `-c-` infix marks it as compressed (purely cosmetic; the
+/// engine identifies via `derived_from.is_empty()`).
+///
+/// Hashing the predecessor ids prevents collisions when two
+/// compressions are issued at the same wall-clock millisecond (which
+/// happens trivially in tests using a fixed `now`, and is plausible
+/// in production under burst host-driven compression).
+fn mint_compressed_id(now: DateTime<Utc>, predecessors: &[MemoryId]) -> MemoryId {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    for id in predecessors {
+        id.as_str().hash(&mut hasher);
+    }
+    let pred_hash = hasher.finish();
     let ms = now.timestamp_millis() as u64;
-    MemoryId::new(format!("mem-c-{:08x}", ms & 0xFFFF_FFFF))
+    let composite = ms.wrapping_mul(0x9E3779B97F4A7C15).wrapping_add(pred_hash);
+    MemoryId::new(format!("mem-c-{composite:016x}"))
 }
 
 #[cfg(test)]
@@ -682,6 +695,18 @@ mod tests {
     fn mint_compressed_id_format() {
         let id = mint_compressed_id(now_t(), &[]);
         assert!(id.as_str().starts_with("mem-c-"));
-        assert_eq!(id.as_str().len(), "mem-c-".len() + 8);
+        assert_eq!(id.as_str().len(), "mem-c-".len() + 16);
+    }
+
+    #[test]
+    fn mint_compressed_id_differs_for_different_predecessor_sets() {
+        // Same `now`, different predecessor sets → different ids
+        // (avoids collisions in recursive/burst compression).
+        let id_a = mint_compressed_id(now_t(), &[MemoryId::new("mem-a")]);
+        let id_b = mint_compressed_id(now_t(), &[MemoryId::new("mem-b")]);
+        assert_ne!(
+            id_a, id_b,
+            "minted ids must differ when predecessor sets differ"
+        );
     }
 }
