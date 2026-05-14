@@ -19,6 +19,7 @@
 pub mod gate;
 pub mod loader;
 pub mod lock;
+pub mod narrative;
 pub mod signals;
 
 // Canonical async API (Phase A C4 + C5):
@@ -27,6 +28,9 @@ pub use signals::{record_applied, record_signal, SignalPolarity};
 
 // Phase B C-B2 — promotion gate (the marketing wedge):
 pub use gate::{check_promotion_gate, BlockReason, GateDecision, PassReason, PromotionConfig};
+
+// Phase D C-D2 — causal-narrative generation:
+pub use narrative::{NarrativeConfig, NarrativeContext};
 
 // Deprecated sync wrappers — retained for backward compat through Phase
 // A. Retire in Phase F or G when the daemon binary's wiring is fully

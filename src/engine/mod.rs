@@ -37,7 +37,8 @@ pub use events::{EngineEvent, EventSource, EventSourceError, HostVersion, Projec
 // of the prelude-level `ActiveLesson`), so the gate types belong in the
 // prelude alongside it.
 pub use lessons::{
-    check_promotion_gate, BlockReason, GateDecision, PassReason, PromotionConfig,
+    check_promotion_gate, BlockReason, GateDecision, NarrativeConfig, NarrativeContext,
+    PassReason, PromotionConfig,
 };
 pub use llm::{
     FinishReason, GenerateRequest, Generation, LlmClient, LlmError, ResponseFormat, TokenUsage,
