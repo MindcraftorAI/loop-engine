@@ -58,7 +58,7 @@ pub use memory::{
 pub use storage::{
     LocalFsStorage, MemoryStorage, Storage, StorageError, StorageKey, StorageMetadata, Version,
 };
-pub use vector::{SearchHit, VectorIndex, VectorIndexError};
+pub use vector::{HnswVectorIndex, SearchHit, VectorIndex, VectorIndexError};
 // `LessonStatus` is a public field of `ActiveLesson` (and `AssembleConfig`
 // holds a `Vec<LessonStatus>`), so it belongs in the prelude.
 // `Authorship` + `EvidenceRef` are public fields of `LessonFrontmatter`

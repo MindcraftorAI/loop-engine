@@ -99,6 +99,27 @@ tokio-stream = "0.1"
 # Cargo.lock; Phase A C1 promotes to direct dep. MIT OR Apache-2.0.
 semver = { version = "1", default-features = false }
 
+# Phase E C-E2: HNSW (Hierarchical Navigable Small World) approximate-
+# nearest-neighbor index for the local `VectorIndex` impl. Default
+# features only — no SIMD opt-ins for maximal portability. MIT OR
+# Apache-2.0. Maintained at github.com/jean-pierreBoth/hnswlib-rs.
+hnsw_rs = { version = "0.3", default-features = false }
+
+# Phase E C-E2: `parking_lot::RwLock` for HNSW state interior
+# mutability. Significantly faster than `std::sync::RwLock` on most
+# platforms; no poisoning surface (panic-during-write doesn't lock
+# out subsequent readers, which suits our use case where the writer
+# is the daemon and panics terminate the process anyway). MIT.
+parking_lot = "0.12"
+
+# Phase E C-E2: tempfile crate for the persist/load bridge — hnsw_rs
+# requires real filesystem paths for dump/reload (`file_dump` /
+# `HnswIo::new`). We bridge: dump to tempdir → read bytes → put
+# through `Storage` (and reverse on load). Was previously a
+# dev-dependency only; promoted to a runtime dep for the HNSW
+# bridge. MIT OR Apache-2.0.
+tempfile = "3"
+
 [features]
 # Test fixtures: ships `MockSentimentClassifier` for cross-crate test
 # code (integration tests, future external consumers). Production

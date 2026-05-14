@@ -22,8 +22,10 @@ use std::fmt::Debug;
 use async_trait::async_trait;
 
 pub mod error;
+pub mod hnsw;
 
 pub use error::VectorIndexError;
+pub use hnsw::HnswVectorIndex;
 
 use crate::engine::context::Context;
 use crate::engine::memory::MemoryId;
