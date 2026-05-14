@@ -52,6 +52,14 @@ pub struct Manifest {
     /// [`AssembleConfig::memory_query`]. Empty when `memory_query` is
     /// `None`. Ordered by descending similarity score.
     pub memories: Vec<MemoryRef>,
+    /// Phase F C-F4: skills the host marked active via
+    /// `SessionState::active_skill_ids`. Empty when no `SessionState`
+    /// was supplied OR no matching skills exist.
+    pub active_skills: Vec<crate::engine::skills::SkillRef>,
+    /// Phase F C-F4: active personas. Same population semantics.
+    pub active_personas: Vec<crate::engine::personas::PersonaRef>,
+    /// Phase F C-F4: active teams.
+    pub active_teams: Vec<crate::engine::teams::TeamRef>,
     /// Diagnostics + summary stats for the assembly pass that produced
     /// this manifest — useful for CLI rendering, debugging, and caller
     /// observability.
@@ -124,6 +132,35 @@ pub struct AssembleConfig {
     /// Max number of memories to return in the manifest's `memories`
     /// section. Default 5. Ignored when `memory_query` is `None`.
     pub memory_limit: usize,
+    /// Phase F C-F4: optional scope filter on the memory section.
+    /// `None` (default) returns memories of any scope. Set e.g.
+    /// `Some(MemoryScopeFilter::Kind("team"))` to filter to team-
+    /// scoped memories only.
+    pub memory_scope_filter: Option<crate::engine::memory::MemoryScopeFilter>,
+}
+
+/// Phase F C-F4: per-session active-set descriptor. Host sets
+/// before calling `assemble`; engine populates
+/// `Manifest::active_skills/personas/teams` from the listed ids.
+/// `None` skill/persona/team ids fields = no active set (manifest
+/// section stays empty).
+///
+/// `#[non_exhaustive]` so future cycles add `active_user_id`,
+/// session metadata, etc additively.
+#[derive(Debug, Clone, Default)]
+#[non_exhaustive]
+pub struct SessionState {
+    pub active_skill_ids: Vec<String>,
+    pub active_persona_ids: Vec<String>,
+    pub active_team_ids: Vec<String>,
+}
+
+impl SessionState {
+    /// Empty state (no active skills/personas/teams). Same as
+    /// `Self::default()`.
+    pub fn empty() -> Self {
+        Self::default()
+    }
 }
 
 impl Default for AssembleConfig {
@@ -137,6 +174,7 @@ impl Default for AssembleConfig {
             promotion_config: PromotionConfig::default(),
             memory_query: None,
             memory_limit: 5,
+            memory_scope_filter: None,
         }
     }
 }
@@ -173,6 +211,10 @@ pub struct AssemblyStats {
     /// still delivered with empty `memories` and this counter
     /// increments. Soft-fail per D-C8.
     pub memory_search_failures: usize,
+    /// Phase F C-F4: number of `SessionState` ids (across skills,
+    /// personas, teams) that didn't resolve to on-disk records.
+    /// Stale-state signal — host should investigate.
+    pub session_section_skips: usize,
 }
 
 impl AssemblyStats {
@@ -185,6 +227,7 @@ impl AssemblyStats {
             record_applied_failures: 0,
             memories_returned: None,
             memory_search_failures: 0,
+            session_section_skips: 0,
         }
     }
 }
@@ -212,12 +255,13 @@ impl AssemblyStats {
 ///    on embedder/index errors (manifest delivery > memory section).
 ///    Pass `embedder = None` + `vector_index = None` for memory-free
 ///    callers (Phase B/C-style consumers).
-#[allow(clippy::too_many_arguments)] // Embedder + VectorIndex are optional Phase E plumbing
+#[allow(clippy::too_many_arguments)] // Plumbing for E/F traits + Phase F SessionState
 pub async fn assemble(
     ctx: &Context,
     storage: &dyn Storage,
     embedder: Option<&dyn Embedder>,
     vector_index: Option<&dyn VectorIndex>,
+    session_state: Option<&SessionState>,
     config: &AssembleConfig,
     now: DateTime<Utc>,
 ) -> Result<Manifest, EngineError> {
@@ -350,11 +394,101 @@ pub async fn assemble(
         _ => Vec::new(),
     };
 
+    // Step 7: Phase F C-F4 — populate active_skills/personas/teams
+    // from the SessionState's id lists. Soft-fails per-id: missing
+    // ids are warn-logged + skipped (host might have stale state
+    // that points at archived entries).
+    let (active_skills, active_personas, active_teams) = match session_state {
+        Some(state) => {
+            populate_active_session_sections(ctx, storage, state, &mut stats).await?
+        }
+        None => (Vec::new(), Vec::new(), Vec::new()),
+    };
+
     Ok(Manifest {
         active_lessons,
         memories,
+        active_skills,
+        active_personas,
+        active_teams,
         assembly_stats: stats,
     })
+}
+
+/// Populate the Phase F manifest sections. Returns (skills, personas,
+/// teams). Bumps `stats.session_section_skips` for ids that don't
+/// resolve.
+async fn populate_active_session_sections(
+    ctx: &Context,
+    storage: &dyn Storage,
+    state: &SessionState,
+    stats: &mut AssemblyStats,
+) -> Result<
+    (
+        Vec<crate::engine::skills::SkillRef>,
+        Vec<crate::engine::personas::PersonaRef>,
+        Vec<crate::engine::teams::TeamRef>,
+    ),
+    EngineError,
+> {
+    use crate::engine::personas::PersonaRef;
+    use crate::engine::skills::SkillRef;
+    use crate::engine::teams::TeamRef;
+
+    let mut skills: Vec<SkillRef> = Vec::new();
+    for id in &state.active_skill_ids {
+        match crate::engine::skills::get_by_id(ctx, storage, id).await? {
+            Some(s) => {
+                let mut sref = SkillRef::new(
+                    id.clone(),
+                    s.frontmatter.name.clone(),
+                    s.frontmatter.description.clone(),
+                );
+                sref.status = s.frontmatter.status;
+                sref.activation = s.frontmatter.activation.clone();
+                skills.push(sref);
+            }
+            None => {
+                warn!(id = %id, "manifest: active skill id has no on-disk record; skipping");
+                stats.session_section_skips += 1;
+            }
+        }
+    }
+
+    let mut personas: Vec<PersonaRef> = Vec::new();
+    for id in &state.active_persona_ids {
+        match crate::engine::personas::get_by_id(ctx, storage, id).await? {
+            Some(p) => personas.push(PersonaRef {
+                id: id.clone(),
+                name: p.frontmatter.name,
+                description: p.frontmatter.description,
+                status: p.frontmatter.status,
+            }),
+            None => {
+                warn!(id = %id, "manifest: active persona id has no on-disk record; skipping");
+                stats.session_section_skips += 1;
+            }
+        }
+    }
+
+    let mut teams: Vec<TeamRef> = Vec::new();
+    for id in &state.active_team_ids {
+        match crate::engine::teams::get_by_id(ctx, storage, id).await? {
+            Some(t) => teams.push(TeamRef {
+                id: id.clone(),
+                name: t.frontmatter.name,
+                description: t.frontmatter.description,
+                status: t.frontmatter.status,
+                member_count: t.frontmatter.members.len(),
+            }),
+            None => {
+                warn!(id = %id, "manifest: active team id has no on-disk record; skipping");
+                stats.session_section_skips += 1;
+            }
+        }
+    }
+
+    Ok((skills, personas, teams))
 }
 
 /// Internal: per-lesson record carrying both the public-facing
@@ -508,6 +642,7 @@ mod tests {
             h.storage.as_ref(),
             None,
             None,
+            None,
             &AssembleConfig::default(),
             now,
         )
@@ -526,7 +661,7 @@ mod tests {
             statuses: vec![],
             ..AssembleConfig::default()
         };
-        let result = assemble(&h.ctx, h.storage.as_ref(), None, None, &config, now).await;
+        let result = assemble(&h.ctx, h.storage.as_ref(), None, None, None, &config, now).await;
         match result {
             Err(EngineError::ManifestInvalidStatus { status }) => {
                 assert!(status.contains("empty"));
@@ -595,6 +730,7 @@ mod tests {
             h.storage.as_ref(),
             None,
             None,
+            None,
             &AssembleConfig::default(),
             now_t(),
         )
@@ -619,6 +755,7 @@ mod tests {
             h.storage.as_ref(),
             None,
             None,
+            None,
             &AssembleConfig::default(),
             now_t(),
         )
@@ -632,7 +769,7 @@ mod tests {
             statuses: vec![LessonStatus::Active, LessonStatus::Promoted],
             ..AssembleConfig::default()
         };
-        let m = assemble(&h.ctx, h.storage.as_ref(), None, None, &config, now_t())
+        let m = assemble(&h.ctx, h.storage.as_ref(), None, None, None, &config, now_t())
             .await
             .unwrap();
         assert_eq!(m.active_lessons.len(), 2);
@@ -649,7 +786,7 @@ mod tests {
             lesson_limit: 3,
             ..AssembleConfig::default()
         };
-        let m = assemble(&h.ctx, h.storage.as_ref(), None, None, &config, now_t())
+        let m = assemble(&h.ctx, h.storage.as_ref(), None, None, None, &config, now_t())
             .await
             .unwrap();
         assert_eq!(m.assembly_stats.total_listed, 10);
@@ -669,6 +806,7 @@ mod tests {
         let m = assemble(
             &h.ctx,
             h.storage.as_ref(),
+            None,
             None,
             None,
             &AssembleConfig::default(),
@@ -721,6 +859,7 @@ mod tests {
             h.storage.as_ref(),
             None,
             None,
+            None,
             &AssembleConfig::default(),
             now_t(),
         )
@@ -745,6 +884,7 @@ mod tests {
         let m = assemble(
             &h.ctx,
             h.storage.as_ref(),
+            None,
             None,
             None,
             &AssembleConfig::default(),
@@ -774,7 +914,7 @@ mod tests {
             body_preview_len: 10,
             ..AssembleConfig::default()
         };
-        let m = assemble(&h.ctx, h.storage.as_ref(), None, None, &config, now_t())
+        let m = assemble(&h.ctx, h.storage.as_ref(), None, None, None, &config, now_t())
             .await
             .unwrap();
         let lesson = &m.active_lessons[0];
@@ -795,6 +935,7 @@ mod tests {
         let m = assemble(
             &h.ctx,
             h.storage.as_ref(),
+            None,
             None,
             None,
             &AssembleConfig::default(),
@@ -819,6 +960,7 @@ mod tests {
             h.storage.as_ref(),
             None,
             None,
+            None,
             &AssembleConfig::default(), // annotate_with_gate = true
             now_t(),
         )
@@ -839,7 +981,7 @@ mod tests {
             annotate_with_gate: false,
             ..AssembleConfig::default()
         };
-        let m = assemble(&h.ctx, h.storage.as_ref(), None, None, &config, now_t())
+        let m = assemble(&h.ctx, h.storage.as_ref(), None, None, None, &config, now_t())
             .await
             .unwrap();
         assert_eq!(m.active_lessons.len(), 1);
@@ -856,6 +998,7 @@ mod tests {
         let m = assemble(
             &h.ctx,
             h.storage.as_ref(),
+            None,
             None,
             None,
             &AssembleConfig::default(),
@@ -883,7 +1026,7 @@ mod tests {
             record_applied: false,
             ..AssembleConfig::default()
         };
-        let _ = assemble(&h.ctx, h.storage.as_ref(), None, None, &config, now_t())
+        let _ = assemble(&h.ctx, h.storage.as_ref(), None, None, None, &config, now_t())
             .await
             .unwrap();
         let after = get_by_id(&h.ctx, h.storage.as_ref(), "les-noinc001")
@@ -936,6 +1079,7 @@ mod tests {
         let m = assemble(
             &h.ctx,
             h.storage.as_ref(),
+            None,
             None,
             None,
             &AssembleConfig::default(),
@@ -996,6 +1140,7 @@ mod tests {
             h.storage.as_ref(),
             None,
             None,
+            None,
             &AssembleConfig::default(),
             now_t(),
         )
@@ -1046,6 +1191,7 @@ mod tests {
             h.storage.as_ref(),
             Some(&embedder),
             Some(&vector_index),
+            None,
             &config,
             now_t(),
         )
@@ -1069,6 +1215,7 @@ mod tests {
         let m = assemble(
             &h.ctx,
             h.storage.as_ref(),
+            None,
             None,
             None,
             &config,
@@ -1137,6 +1284,7 @@ mod tests {
             h.storage.as_ref(),
             Some(&embedder),
             Some(&vector_index),
+            None,
             &config,
             now_t(),
         )
@@ -1253,5 +1401,141 @@ mod tests {
             call_count, 4,
             "predicate must run exactly once per memory; got {call_count} calls for 4 memories"
         );
+    }
+
+    // ---------------------------------------------------------------
+    // C-F4: SessionState population — Phase F manifest sections.
+    // ---------------------------------------------------------------
+
+    #[tokio::test]
+    async fn assemble_active_sections_empty_when_session_state_none() {
+        let h = TestHarness::in_memory();
+        let m = assemble(
+            &h.ctx,
+            h.storage.as_ref(),
+            None,
+            None,
+            None,
+            &AssembleConfig::default(),
+            now_t(),
+        )
+        .await
+        .unwrap();
+        assert!(m.active_skills.is_empty());
+        assert!(m.active_personas.is_empty());
+        assert!(m.active_teams.is_empty());
+        assert_eq!(m.assembly_stats.session_section_skips, 0);
+    }
+
+    #[tokio::test]
+    async fn assemble_populates_active_skills_from_session_state() {
+        use crate::engine::skills::{insert as insert_skill, SkillFrontmatter};
+
+        let h = TestHarness::in_memory();
+        let fm = SkillFrontmatter::new("formatter", "auto-format on save");
+        insert_skill(&h.ctx, h.storage.as_ref(), "skl-fmt00001", fm, "body")
+            .await
+            .unwrap();
+
+        let session = SessionState {
+            active_skill_ids: vec!["skl-fmt00001".to_string()],
+            ..SessionState::empty()
+        };
+        let m = assemble(
+            &h.ctx,
+            h.storage.as_ref(),
+            None,
+            None,
+            Some(&session),
+            &AssembleConfig::default(),
+            now_t(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(m.active_skills.len(), 1);
+        assert_eq!(m.active_skills[0].id, "skl-fmt00001");
+        assert_eq!(m.active_skills[0].name, "formatter");
+        assert_eq!(m.assembly_stats.session_section_skips, 0);
+    }
+
+    #[tokio::test]
+    async fn assemble_skips_missing_session_ids_and_counts_them() {
+        let h = TestHarness::in_memory();
+        let session = SessionState {
+            active_skill_ids: vec!["skl-noexist1".to_string()],
+            active_persona_ids: vec!["pers-noexist".to_string()],
+            active_team_ids: vec!["tm-noexist".to_string()],
+        };
+        let m = assemble(
+            &h.ctx,
+            h.storage.as_ref(),
+            None,
+            None,
+            Some(&session),
+            &AssembleConfig::default(),
+            now_t(),
+        )
+        .await
+        .unwrap();
+        assert!(m.active_skills.is_empty());
+        assert!(m.active_personas.is_empty());
+        assert!(m.active_teams.is_empty());
+        assert_eq!(m.assembly_stats.session_section_skips, 3);
+    }
+
+    #[tokio::test]
+    async fn assemble_populates_all_three_sections() {
+        use crate::engine::personas::{insert as insert_persona, PersonaFrontmatter};
+        use crate::engine::skills::{insert as insert_skill, SkillFrontmatter};
+        use crate::engine::teams::{insert as insert_team, TeamFrontmatter};
+
+        let h = TestHarness::in_memory();
+        insert_skill(
+            &h.ctx,
+            h.storage.as_ref(),
+            "skl-aaaa",
+            SkillFrontmatter::new("skill", "desc"),
+            "body",
+        )
+        .await
+        .unwrap();
+        insert_persona(
+            &h.ctx,
+            h.storage.as_ref(),
+            "pers-aaaa",
+            PersonaFrontmatter::new("pers-aaaa", "Persona", "desc"),
+            "body",
+        )
+        .await
+        .unwrap();
+        insert_team(
+            &h.ctx,
+            h.storage.as_ref(),
+            "tm-aaaa",
+            TeamFrontmatter::new("tm-aaaa", "Team", "desc"),
+            "body",
+        )
+        .await
+        .unwrap();
+
+        let session = SessionState {
+            active_skill_ids: vec!["skl-aaaa".to_string()],
+            active_persona_ids: vec!["pers-aaaa".to_string()],
+            active_team_ids: vec!["tm-aaaa".to_string()],
+        };
+        let m = assemble(
+            &h.ctx,
+            h.storage.as_ref(),
+            None,
+            None,
+            Some(&session),
+            &AssembleConfig::default(),
+            now_t(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(m.active_skills.len(), 1);
+        assert_eq!(m.active_personas.len(), 1);
+        assert_eq!(m.active_teams.len(), 1);
     }
 }

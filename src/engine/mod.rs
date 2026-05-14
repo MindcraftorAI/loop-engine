@@ -52,7 +52,9 @@ pub use lessons::{
 pub use llm::{
     FinishReason, GenerateRequest, Generation, LlmClient, LlmError, ResponseFormat, TokenUsage,
 };
-pub use manifest::{assemble, ActiveLesson, AssembleConfig, AssemblyStats, Manifest};
+pub use manifest::{
+    assemble, ActiveLesson, AssembleConfig, AssemblyStats, Manifest, SessionState,
+};
 // Phase E memory + vector types — surfaces via Manifest and the new
 // `engine::memory` / `engine::vector` modules.
 // CRUD functions are re-exported with `memory_` prefix to avoid
