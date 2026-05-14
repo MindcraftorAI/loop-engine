@@ -30,7 +30,8 @@ use crate::engine::context::Context;
 use crate::engine::embedding::Embedder;
 use crate::engine::error::EngineError;
 use crate::engine::memory::{
-    Memory, MemoryFrontmatter, MemoryId, MemoryQuery, MemoryRef, PrunePredicate, PruneStats,
+    Memory, MemoryFrontmatter, MemoryId, MemoryQuery, MemoryRef, MemoryScopeFilter,
+    PrunePredicate, PruneStats,
 };
 use crate::engine::storage::{Storage, StorageKey};
 use crate::engine::vector::{SearchHit, VectorIndex};
@@ -233,10 +234,109 @@ pub async fn get_by_id_with_embedding(
     Ok(Some(mem))
 }
 
+/// Statistics returned by [`rehydrate_vector_index`].
+#[derive(Debug, Default, Clone, Copy)]
+pub struct RehydrateStats {
+    /// Number of `.md` files scanned.
+    pub scanned: usize,
+    /// Memories successfully inserted into the vector index.
+    pub inserted: usize,
+    /// `.md` files whose `.vec` sidecar was missing or malformed.
+    pub skipped_missing_vec: usize,
+    /// Frontmatter parse failures (corrupt YAML, etc).
+    pub skipped_parse_error: usize,
+}
+
+/// Rebuild the in-memory vector index from on-disk `.md`/`.vec` pairs.
+/// MUST be called once at engine startup, before any `search()` call
+/// on persisted memories.
+///
+/// The HNSW index lives in process memory; on restart it starts empty,
+/// while the `.md` + `.vec` files survive on disk. Without this step
+/// previously-stored memories are invisible to `search()` after a
+/// process restart — even though `get_by_id` continues to work because
+/// that path reads frontmatter directly from storage.
+///
+/// Soft-fails on individual entries (missing/malformed `.vec`, parse
+/// errors) — those memories are skipped and counted in `RehydrateStats`
+/// rather than aborting the whole rehydrate.
+pub async fn rehydrate_vector_index(
+    ctx: &Context,
+    storage: &dyn Storage,
+    vector_index: &dyn VectorIndex,
+    expected_dims: usize,
+) -> Result<RehydrateStats, EngineError> {
+    let mut stats = RehydrateStats::default();
+    let prefix = StorageKey::memories_prefix(ctx);
+    let keys = storage.list(&prefix).await?;
+
+    for key in keys {
+        // Skip .vec sidecars + anything else; we drive off the .md
+        // frontmatter files as the authoritative list.
+        let key_str = key.as_str();
+        if !key_str.ends_with(".md") {
+            continue;
+        }
+        stats.scanned += 1;
+
+        // Derive id from the trailing `memories/<id>.md` segment.
+        let Some(fname) = key_str.rsplit('/').next() else {
+            continue;
+        };
+        let Some(id_str) = fname.strip_suffix(".md") else {
+            continue;
+        };
+        let id = MemoryId::new(id_str.to_string());
+
+        match get_by_id_with_embedding(ctx, storage, &id, expected_dims).await {
+            Ok(Some(mem)) => {
+                if let Some(embedding) = mem.embedding {
+                    vector_index.insert(ctx, &id, &embedding).await?;
+                    stats.inserted += 1;
+                } else {
+                    // get_by_id_with_embedding only returns Some when
+                    // both md + vec are present — this branch is
+                    // unreachable in practice. Count it just in case.
+                    stats.skipped_missing_vec += 1;
+                }
+            }
+            Ok(None) => {
+                // md was missing under the listed key. Race window or
+                // stale list; count + continue.
+                stats.skipped_missing_vec += 1;
+            }
+            Err(e) => {
+                warn!(
+                    id = %id, error = %e,
+                    "rehydrate_vector_index: skipping memory"
+                );
+                if matches!(e, EngineError::Yaml(_) | EngineError::Parse(_)) {
+                    stats.skipped_parse_error += 1;
+                } else {
+                    stats.skipped_missing_vec += 1;
+                }
+            }
+        }
+    }
+
+    Ok(stats)
+}
+
 /// Semantic search across all memories. Embeds the query (if it's a
 /// `Text` variant), runs the vector index search, hydrates the top-k
 /// hits into `MemoryRef` shape (id + description + body preview +
 /// similarity).
+///
+/// `scope_filter`, when `Some`, drops hits whose frontmatter scope
+/// doesn't satisfy the filter. The frontmatter is loaded inline (no
+/// extra disk roundtrip — `get_by_id` was already called for body
+/// preview), so filtering is essentially free.
+///
+/// Known v0.3.1 limitation: with a `scope_filter`, the returned vec
+/// may have fewer than `k` entries when in-scope hits don't fill the
+/// top-k vector neighborhood. Callers that need k-guaranteed results
+/// should over-fetch (e.g. pass `k * 2` and truncate). The Phase F
+/// manifest assembly does exactly that.
 pub async fn search(
     ctx: &Context,
     storage: &dyn Storage,
@@ -245,6 +345,7 @@ pub async fn search(
     query: &MemoryQuery,
     k: usize,
     body_preview_len: usize,
+    scope_filter: Option<&MemoryScopeFilter>,
 ) -> Result<Vec<MemoryRef>, EngineError> {
     let query_vec: Vec<f32> = match query {
         MemoryQuery::Text(s) => {
@@ -263,6 +364,11 @@ pub async fn search(
         // between vector index entry and .md file) — log + skip.
         match get_by_id(ctx, storage, &hit.id).await {
             Ok(Some(mem)) => {
+                if let Some(f) = scope_filter {
+                    if !f.matches(&mem.frontmatter.scope) {
+                        continue;
+                    }
+                }
                 let body_preview = mem
                     .content
                     .chars()
@@ -834,7 +940,7 @@ mod tests {
         // Search with a pre-computed query vector aligned with axis 0.
         let q = MemoryQuery::Vector(unit_vec(4, 0));
         let embedder_search = MockEmbedder::new(4); // unused for Vector queries
-        let hits = search(&ctx(), storage.as_ref(), &embedder_search, &vector_index, &q, 1, 50).await.unwrap();
+        let hits = search(&ctx(), storage.as_ref(), &embedder_search, &vector_index, &q, 1, 50, None).await.unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].id, a);
         assert_eq!(hits[0].description, "axis 0");

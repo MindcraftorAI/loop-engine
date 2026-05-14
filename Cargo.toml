@@ -82,6 +82,11 @@ async-trait = "0.1"
 # promoted to direct dep. MIT.
 bytes = "1"
 
+# OpenAI-compatible Embedder + LlmClient implementations talk HTTP to
+# providers (OpenAI cloud, Ollama, TEI, LM Studio, Voyage). `rustls-tls`
+# avoids the OpenSSL system dep. MIT/Apache.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
 # `BoxStream` type alias used by `EventSource`. MIT/Apache.
 futures = { version = "0.3", default-features = false, features = ["std", "async-await"] }
 

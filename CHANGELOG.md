@@ -69,9 +69,38 @@ via `#[non_exhaustive]` on all public types.
   exposes the engine as a programmatic RPC endpoint for host
   adapters (opensquid MCP server, future TS/Python launchers). Line-
   delimited JSON-RPC 2.0 on stdin/stdout; stderr stays free for
-  diagnostics. v1 methods: `ping`, `lesson.create`, `lesson.recall`,
-  `lesson.promote`, `lesson.discard`. Memory + manifest + skill/
-  persona/team methods land alongside the embedder integration.
+  diagnostics. v1 methods:
+  - `ping`
+  - `lesson.create`, `lesson.recall`, `lesson.promote`, `lesson.discard`
+  - `memory.create` (optional `scope` param → `MemoryScope`-aware insert),
+    `memory.search` (`include_body: bool` returns FULL content;
+    `scope_filter` restricts results by `MemoryScope`), `memory.get`
+    (fetch a memory by id with full content + scope tag)
+
+- **`OpenAiCompatibleEmbedder`** (`engine::embedding`): production
+  embedder over the OpenAI-compatible `/v1/embeddings` API surface.
+  Drop-in for Ollama (`qwen3-embedding:4b`, 2560 dims, the dogfood
+  default) or any provider matching that interface (Voyage, etc).
+  Configured via env (`OPENSQUID_EMBEDDER_URL/MODEL/DIMENSIONS/API_KEY`)
+  or constructed directly.
+
+- **Scope-aware semantic search**: `memory::search()` accepts an
+  optional `&MemoryScopeFilter`, filtering hits in-loop against
+  the loaded frontmatter. Zero extra disk roundtrip (`get_by_id`
+  already runs per hit). The Phase F manifest assembly path
+  continues to use the over-fetch-then-post-filter pattern;
+  scope-filtered `search()` is the new direct-caller path for
+  serve-mode hosts.
+
+- **Vector index rehydration on serve startup**
+  (`memory::rehydrate_vector_index`): the HNSW index is in-process
+  memory; persisted `.md` + `.vec` pairs survive but the index
+  doesn't. `loop-engine serve` now scans `memories/` on startup and
+  rebuilds the index from disk. This enables cross-session memory
+  recall — Claude Code, Claude Desktop, and IDE-plugin hosts all
+  spawn their own engine subprocess against the shared
+  `~/.opensquid/` store, and each spawn now starts with all
+  persisted memories already searchable.
 
 ### Wedge defense
 

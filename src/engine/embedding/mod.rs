@@ -19,8 +19,10 @@ use async_trait::async_trait;
 
 pub mod error;
 pub mod mock;
+pub mod openai_compatible;
 
 pub use error::EmbeddingError;
+pub use openai_compatible::OpenAiCompatibleEmbedder;
 
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use mock::MockEmbedder;

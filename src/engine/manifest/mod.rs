@@ -366,6 +366,12 @@ pub async fn assemble(
                 query,
                 raw_limit,
                 config.body_preview_len,
+                // Manifest assembly does its own post-filter via
+                // `filter_refs_by_scope` below (preserves the original
+                // over-fetch-then-truncate-to-k semantics). Passing
+                // `None` here keeps that path identical to pre-v0.3.1
+                // behavior.
+                None,
             )
             .await
             {
