@@ -70,7 +70,7 @@ async fn narrative_generation_produces_struct_consumed_by_manifest_gate() {
     // 2. Confirm the gate currently BLOCKS on missing narrative.
     let mut config = AssembleConfig::default();
     config.record_applied = false;
-    let m_before = assemble(&ctx, storage.as_ref(), &config, now())
+    let m_before = assemble(&ctx, storage.as_ref(), None, None, &config, now())
     .await
     .unwrap();
     assert_eq!(m_before.active_lessons.len(), 1);
@@ -128,7 +128,7 @@ async fn narrative_generation_produces_struct_consumed_by_manifest_gate() {
     //    shape, not just "Promote or Block".
     let mut config_after = AssembleConfig::default();
     config_after.record_applied = false;
-    let m_after = assemble(&ctx, storage.as_ref(), &config_after, now())
+    let m_after = assemble(&ctx, storage.as_ref(), None, None, &config_after, now())
         .await
         .unwrap();
     let gate_after = m_after.active_lessons[0]
@@ -219,7 +219,7 @@ async fn narrative_validation_failure_does_not_persist() {
     // rejected narrative was never persisted.
     let mut config = Cfg::default();
     config.record_applied = false;
-    let m = assemble(&ctx, storage.as_ref(), &config, now()).await.unwrap();
+    let m = assemble(&ctx, storage.as_ref(), None, None, &config, now()).await.unwrap();
     let gate = m.active_lessons[0].gate.as_ref().expect("gate");
     match gate {
         GateDecision::Block { reasons } => {

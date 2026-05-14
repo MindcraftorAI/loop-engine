@@ -23,11 +23,14 @@ use chrono::{DateTime, Utc};
 use tracing::warn;
 
 use crate::engine::context::Context;
+use crate::engine::embedding::Embedder;
 use crate::engine::error::EngineError;
 use crate::engine::lessons::{
     check_promotion_gate, record_applied, GateDecision, PromotionConfig,
 };
+use crate::engine::memory::{self, MemoryQuery, MemoryRef};
 use crate::engine::storage::{Storage, StorageKey};
+use crate::engine::vector::VectorIndex;
 use crate::engine::yaml::{
     reader::parse_lesson_frontmatter, split_frontmatter_normalized, LessonFrontmatter,
     LessonStatus,
@@ -40,11 +43,15 @@ use crate::engine::yaml::{
 /// `#[non_exhaustive]` so the engine can grow new sections without a
 /// SemVer break. External callers should pattern-match with wildcards
 /// or use field-access (which IS forward-compatible).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct Manifest {
     /// Active lessons in deterministic order (per [`AssembleConfig`]).
     pub active_lessons: Vec<ActiveLesson>,
+    /// Phase E C-E4: top-k memories relevant to the configured
+    /// [`AssembleConfig::memory_query`]. Empty when `memory_query` is
+    /// `None`. Ordered by descending similarity score.
+    pub memories: Vec<MemoryRef>,
     /// Diagnostics + summary stats for the assembly pass that produced
     /// this manifest — useful for CLI rendering, debugging, and caller
     /// observability.
@@ -108,6 +115,15 @@ pub struct AssembleConfig {
     /// Promotion config used when `annotate_with_gate = true`. Default
     /// [`PromotionConfig::default()`].
     pub promotion_config: PromotionConfig,
+    /// Phase E C-E4: memory section query driver. `None` (default)
+    /// → no memory search; manifest's `memories` field stays empty.
+    /// `Some(MemoryQuery::Text(_))` → engine embeds via the
+    /// supplied [`Embedder`]; `Some(MemoryQuery::Vector(_))` → caller
+    /// pre-embedded. Set this to populate `Manifest::memories`.
+    pub memory_query: Option<MemoryQuery>,
+    /// Max number of memories to return in the manifest's `memories`
+    /// section. Default 5. Ignored when `memory_query` is `None`.
+    pub memory_limit: usize,
 }
 
 impl Default for AssembleConfig {
@@ -119,6 +135,8 @@ impl Default for AssembleConfig {
             annotate_with_gate: true,
             record_applied: true,
             promotion_config: PromotionConfig::default(),
+            memory_query: None,
+            memory_limit: 5,
         }
     }
 }
@@ -145,6 +163,16 @@ pub struct AssemblyStats {
     /// Lessons whose `record_applied` write failed → swallowed per
     /// D-C8 (manifest delivery is more important than the counter).
     pub record_applied_failures: usize,
+    /// Phase E C-E4: memory search outcome. `None` when no memory
+    /// query was configured. `Some(n)` is the count of memories
+    /// returned in `Manifest::memories`. `Some(0)` is a successful
+    /// search that found nothing.
+    pub memories_returned: Option<usize>,
+    /// Phase E C-E4: when the memory search call itself errored
+    /// (embedder failure, vector index failure), the manifest is
+    /// still delivered with empty `memories` and this counter
+    /// increments. Soft-fail per D-C8.
+    pub memory_search_failures: usize,
 }
 
 impl AssemblyStats {
@@ -155,6 +183,8 @@ impl AssemblyStats {
             skipped_count: 0,
             gate_skip_count: 0,
             record_applied_failures: 0,
+            memories_returned: None,
+            memory_search_failures: 0,
         }
     }
 }
@@ -176,9 +206,18 @@ impl AssemblyStats {
 ///    eliminates the redundant get+parse per lesson).
 /// 5. `record_applied` in PARALLEL via `futures::future::join_all`
 ///    (audit A-M2: was serial, ~250ms at lesson_limit=5; now ~50ms).
+/// 6. Phase E C-E4: memory search step. When `config.memory_query`
+///    is `Some(_)` AND `embedder` + `vector_index` are supplied, run
+///    `memory::search` and populate `Manifest::memories`. Soft-fails
+///    on embedder/index errors (manifest delivery > memory section).
+///    Pass `embedder = None` + `vector_index = None` for memory-free
+///    callers (Phase B/C-style consumers).
+#[allow(clippy::too_many_arguments)] // Embedder + VectorIndex are optional Phase E plumbing
 pub async fn assemble(
     ctx: &Context,
     storage: &dyn Storage,
+    embedder: Option<&dyn Embedder>,
+    vector_index: Option<&dyn VectorIndex>,
     config: &AssembleConfig,
     now: DateTime<Utc>,
 ) -> Result<Manifest, EngineError> {
@@ -279,8 +318,41 @@ pub async fn assemble(
     // Project the internal records to the public `ActiveLesson` shape.
     let active_lessons: Vec<ActiveLesson> = records.into_iter().map(|r| r.active).collect();
 
+    // Step 6: Phase E C-E4 — memory search. Runs only when ALL of
+    // (memory_query is Some, embedder is Some, vector_index is Some).
+    // Soft-fails on backend errors — manifest delivery is more
+    // important than the memory section (D-C8 pattern).
+    let memories: Vec<MemoryRef> = match (&config.memory_query, embedder, vector_index) {
+        (Some(query), Some(emb), Some(vi)) => {
+            match memory::search(
+                ctx,
+                storage,
+                emb,
+                vi,
+                query,
+                config.memory_limit,
+                config.body_preview_len,
+            )
+            .await
+            {
+                Ok(refs) => {
+                    stats.memories_returned = Some(refs.len());
+                    refs
+                }
+                Err(e) => {
+                    warn!(error = %e, "manifest: memory search failed; section empty");
+                    stats.memory_search_failures += 1;
+                    stats.memories_returned = Some(0);
+                    Vec::new()
+                }
+            }
+        }
+        _ => Vec::new(),
+    };
+
     Ok(Manifest {
         active_lessons,
+        memories,
         assembly_stats: stats,
     })
 }
@@ -403,6 +475,7 @@ fn validate_config(config: &AssembleConfig) -> Result<(), EngineError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::memory::MemoryId;
     use crate::engine::test_support::TestHarness;
 
     #[test]
@@ -433,6 +506,8 @@ mod tests {
         let m = assemble(
             &h.ctx,
             h.storage.as_ref(),
+            None,
+            None,
             &AssembleConfig::default(),
             now,
         )
@@ -451,7 +526,7 @@ mod tests {
             statuses: vec![],
             ..AssembleConfig::default()
         };
-        let result = assemble(&h.ctx, h.storage.as_ref(), &config, now).await;
+        let result = assemble(&h.ctx, h.storage.as_ref(), None, None, &config, now).await;
         match result {
             Err(EngineError::ManifestInvalidStatus { status }) => {
                 assert!(status.contains("empty"));
@@ -518,6 +593,8 @@ mod tests {
         let m = assemble(
             &h.ctx,
             h.storage.as_ref(),
+            None,
+            None,
             &AssembleConfig::default(),
             now_t(),
         )
@@ -540,6 +617,8 @@ mod tests {
         let m = assemble(
             &h.ctx,
             h.storage.as_ref(),
+            None,
+            None,
             &AssembleConfig::default(),
             now_t(),
         )
@@ -553,7 +632,7 @@ mod tests {
             statuses: vec![LessonStatus::Active, LessonStatus::Promoted],
             ..AssembleConfig::default()
         };
-        let m = assemble(&h.ctx, h.storage.as_ref(), &config, now_t())
+        let m = assemble(&h.ctx, h.storage.as_ref(), None, None, &config, now_t())
             .await
             .unwrap();
         assert_eq!(m.active_lessons.len(), 2);
@@ -570,7 +649,7 @@ mod tests {
             lesson_limit: 3,
             ..AssembleConfig::default()
         };
-        let m = assemble(&h.ctx, h.storage.as_ref(), &config, now_t())
+        let m = assemble(&h.ctx, h.storage.as_ref(), None, None, &config, now_t())
             .await
             .unwrap();
         assert_eq!(m.assembly_stats.total_listed, 10);
@@ -590,6 +669,8 @@ mod tests {
         let m = assemble(
             &h.ctx,
             h.storage.as_ref(),
+            None,
+            None,
             &AssembleConfig::default(),
             now_t(),
         )
@@ -638,6 +719,8 @@ mod tests {
         let m = assemble(
             &h.ctx,
             h.storage.as_ref(),
+            None,
+            None,
             &AssembleConfig::default(),
             now_t(),
         )
@@ -662,6 +745,8 @@ mod tests {
         let m = assemble(
             &h.ctx,
             h.storage.as_ref(),
+            None,
+            None,
             &AssembleConfig::default(),
             now_t(),
         )
@@ -689,7 +774,7 @@ mod tests {
             body_preview_len: 10,
             ..AssembleConfig::default()
         };
-        let m = assemble(&h.ctx, h.storage.as_ref(), &config, now_t())
+        let m = assemble(&h.ctx, h.storage.as_ref(), None, None, &config, now_t())
             .await
             .unwrap();
         let lesson = &m.active_lessons[0];
@@ -710,6 +795,8 @@ mod tests {
         let m = assemble(
             &h.ctx,
             h.storage.as_ref(),
+            None,
+            None,
             &AssembleConfig::default(),
             now_t(),
         )
@@ -730,6 +817,8 @@ mod tests {
         let m = assemble(
             &h.ctx,
             h.storage.as_ref(),
+            None,
+            None,
             &AssembleConfig::default(), // annotate_with_gate = true
             now_t(),
         )
@@ -750,7 +839,7 @@ mod tests {
             annotate_with_gate: false,
             ..AssembleConfig::default()
         };
-        let m = assemble(&h.ctx, h.storage.as_ref(), &config, now_t())
+        let m = assemble(&h.ctx, h.storage.as_ref(), None, None, &config, now_t())
             .await
             .unwrap();
         assert_eq!(m.active_lessons.len(), 1);
@@ -767,6 +856,8 @@ mod tests {
         let m = assemble(
             &h.ctx,
             h.storage.as_ref(),
+            None,
+            None,
             &AssembleConfig::default(),
             now_t(),
         )
@@ -792,7 +883,7 @@ mod tests {
             record_applied: false,
             ..AssembleConfig::default()
         };
-        let _ = assemble(&h.ctx, h.storage.as_ref(), &config, now_t())
+        let _ = assemble(&h.ctx, h.storage.as_ref(), None, None, &config, now_t())
             .await
             .unwrap();
         let after = get_by_id(&h.ctx, h.storage.as_ref(), "les-noinc001")
@@ -845,6 +936,8 @@ mod tests {
         let m = assemble(
             &h.ctx,
             h.storage.as_ref(),
+            None,
+            None,
             &AssembleConfig::default(),
             now_t(),
         )
@@ -889,5 +982,167 @@ mod tests {
         use crate::engine::lessons::get_by_id;
         let after = get_by_id(&h.ctx, h.storage.as_ref(), id).await.unwrap().unwrap();
         assert_eq!(after.frontmatter.applied_count, 6);
+    }
+
+    // ---------------------------------------------------------------
+    // C-E4: memory section integration
+    // ---------------------------------------------------------------
+
+    #[tokio::test]
+    async fn assemble_memories_empty_when_query_is_none() {
+        let h = TestHarness::in_memory();
+        let m = assemble(
+            &h.ctx,
+            h.storage.as_ref(),
+            None,
+            None,
+            &AssembleConfig::default(),
+            now_t(),
+        )
+        .await
+        .unwrap();
+        assert!(m.memories.is_empty());
+        assert!(m.assembly_stats.memories_returned.is_none());
+        assert_eq!(m.assembly_stats.memory_search_failures, 0);
+    }
+
+    #[tokio::test]
+    async fn assemble_memories_populated_when_query_text_with_embedder_and_index() {
+        use crate::engine::embedding::MockEmbedder;
+        use crate::engine::memory;
+        use crate::engine::vector::HnswVectorIndex;
+
+        let h = TestHarness::in_memory();
+        let dim = 4;
+        let embedder = MockEmbedder::new(dim)
+            // Insert call: produces a vec aligned along axis 0.
+            .with_response(vec![vec![1.0, 0.0, 0.0, 0.0]])
+            // Query call: same axis so search returns the inserted memory.
+            .with_response(vec![vec![1.0, 0.0, 0.0, 0.0]]);
+        let vector_index = HnswVectorIndex::new(dim);
+
+        let mid = MemoryId::new("mem-aaaaaaaa");
+        memory::insert(
+            &h.ctx,
+            h.storage.as_ref(),
+            &embedder,
+            &vector_index,
+            mid.clone(),
+            "test memory",
+            "memory body",
+            now_t(),
+        )
+        .await
+        .unwrap();
+
+        let config = AssembleConfig {
+            memory_query: Some(MemoryQuery::Text("query text".to_string())),
+            memory_limit: 5,
+            ..AssembleConfig::default()
+        };
+
+        let m = assemble(
+            &h.ctx,
+            h.storage.as_ref(),
+            Some(&embedder),
+            Some(&vector_index),
+            &config,
+            now_t(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(m.memories.len(), 1);
+        assert_eq!(m.memories[0].id, mid);
+        assert_eq!(m.memories[0].description, "test memory");
+        assert_eq!(m.assembly_stats.memories_returned, Some(1));
+    }
+
+    #[tokio::test]
+    async fn assemble_memories_skipped_when_only_partial_plumbing() {
+        // memory_query Some but embedder/vector_index None → empty
+        // memories, no error.
+        let h = TestHarness::in_memory();
+        let config = AssembleConfig {
+            memory_query: Some(MemoryQuery::Vector(vec![0.0; 4])),
+            ..AssembleConfig::default()
+        };
+        let m = assemble(
+            &h.ctx,
+            h.storage.as_ref(),
+            None,
+            None,
+            &config,
+            now_t(),
+        )
+        .await
+        .unwrap();
+        assert!(m.memories.is_empty());
+        // memories_returned stays None — the query path didn't run
+        // because plumbing was incomplete.
+        assert!(m.assembly_stats.memories_returned.is_none());
+    }
+
+    #[tokio::test]
+    async fn wedge_cross_cutting_user_immune_memory_survives_prune_visible_to_search() {
+        // THE cross-cutting wedge regression at the memory layer.
+        // 1. Insert a memory.
+        // 2. Simulate a user-authored lesson citing it (increment counter).
+        // 3. Run a prune-everything predicate → memory survives.
+        // 4. Assemble manifest → memory still surfaces in the
+        //    `memories` section (proves immunity protects DISCOVERY,
+        //    not just storage).
+        use crate::engine::embedding::MockEmbedder;
+        use crate::engine::memory;
+        use crate::engine::vector::HnswVectorIndex;
+
+        let h = TestHarness::in_memory();
+        let dim = 4;
+        let embedder = MockEmbedder::new(dim)
+            .with_response(vec![vec![1.0, 0.0, 0.0, 0.0]])
+            .with_response(vec![vec![1.0, 0.0, 0.0, 0.0]]);
+        let vector_index = HnswVectorIndex::new(dim);
+        let mid = MemoryId::new("mem-cited001");
+        memory::insert(
+            &h.ctx,
+            h.storage.as_ref(),
+            &embedder,
+            &vector_index,
+            mid.clone(),
+            "user-cited memory",
+            "important context",
+            now_t(),
+        )
+        .await
+        .unwrap();
+        // Simulate user citation.
+        memory::increment_citation_count(&h.ctx, h.storage.as_ref(), &mid)
+            .await
+            .unwrap();
+
+        // Prune-everything predicate.
+        let pred: crate::engine::memory::PrunePredicate = Box::new(|_fm| true);
+        let stats =
+            memory::prune(&h.ctx, h.storage.as_ref(), &vector_index, pred).await.unwrap();
+        assert_eq!(stats.pruned, 0, "user-immune memory MUST survive prune");
+        assert_eq!(stats.skipped_user_immune, 1);
+
+        // The memory is still in storage AND in the index. Assemble
+        // and query — should surface.
+        let config = AssembleConfig {
+            memory_query: Some(MemoryQuery::Text("query".to_string())),
+            ..AssembleConfig::default()
+        };
+        let m = assemble(
+            &h.ctx,
+            h.storage.as_ref(),
+            Some(&embedder),
+            Some(&vector_index),
+            &config,
+            now_t(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(m.memories.len(), 1, "user-immune memory MUST still be discoverable");
+        assert_eq!(m.memories[0].id, mid);
     }
 }
