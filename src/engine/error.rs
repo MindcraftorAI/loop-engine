@@ -17,6 +17,7 @@ use crate::engine::embedding::error::EmbeddingError;
 use crate::engine::lessons::gate::BlockReason;
 use crate::engine::llm::error::LlmError;
 use crate::engine::storage::StorageError;
+use crate::engine::vector::error::VectorIndexError;
 
 #[derive(Debug, Error)]
 #[non_exhaustive]
@@ -67,6 +68,10 @@ pub enum EngineError {
     /// Embedding call failure. Phase D / E surface.
     #[error("embedding error: {0}")]
     Embedding(#[source] EmbeddingError),
+
+    /// Vector index call failure. Phase E surface.
+    #[error("vector index error: {0}")]
+    VectorIndex(#[source] VectorIndexError),
 
     /// `narrative::generate` rejected the LLM output as too thin to
     /// ground (the model returned a refusal indicating the inputs

@@ -374,7 +374,7 @@ pub fn check_promotion_gate(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::yaml::{CausalNarrative, GeneratedBy};
+    use crate::engine::yaml::{CausalNarrative, EvidenceRef, GeneratedBy};
 
     fn now() -> DateTime<Utc> {
         "2026-05-13T12:00:00Z".parse().unwrap()
@@ -412,6 +412,7 @@ mod tests {
             superseded_by: None,
             superseded_at: None,
             ingest_provenance: None,
+            authored_by: Default::default(),
             updated_at: None,
         }
     }
@@ -713,7 +714,9 @@ mod tests {
         let mut fm = passing_fm();
         if let Some(cn) = fm.causal_narrative.as_mut() {
             cn.confidence = Confidence::Observed;
-            cn.evidence_refs = vec!["session:abc123#tool_use_1".into()];
+            cn.evidence_refs = vec![EvidenceRef::Quote(
+                "session:abc123#tool_use_1".into(),
+            )];
         }
         let md = matching_metadata(&fm);
         let dec = check_promotion_gate(&fm, &md, &PromotionConfig::default(), now());

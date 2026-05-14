@@ -6,7 +6,12 @@
 //! read-modify-write cycle. Audit Day 11 finding A1: the daemon must emit
 //! in this order to keep git diffs stable across cross-process mutations.
 
-use serde::{Deserialize, Serialize};
+use std::fmt;
+
+use serde::de::{Error as DeError, MapAccess, Visitor};
+use serde::{Deserialize, Deserializer, Serialize};
+
+use crate::engine::memory::MemoryId;
 
 /// 5-status lifecycle from ADR-0010. String-encoded in frontmatter
 /// (`status: active` etc); the daemon trusts the file path more than
@@ -75,10 +80,122 @@ pub struct CausalNarrative {
     pub failure_mode: String,
     pub correction: String,
     pub confidence: Confidence,
+    /// Phase E D-E10: typed evidence references. Reads accept BOTH the
+    /// legacy `Vec<String>` form (each string wraps as
+    /// `EvidenceRef::Quote(_)`) AND the typed tagged form (`{quote:
+    /// ...}` or `{memory: mem-id}`). Writes always emit the typed
+    /// form. After one load+save cycle, all on-disk lessons converge.
     #[serde(default)]
-    pub evidence_refs: Vec<String>,
+    pub evidence_refs: Vec<EvidenceRef>,
     pub generated_by: GeneratedBy,
     pub generated_at: String,
+}
+
+/// One element of [`CausalNarrative::evidence_refs`]. Phase E D-E10
+/// makes evidence typed so a user-authored lesson can cite a
+/// [`MemoryId`] directly — enabling the engine-enforced user-immunity
+/// counter on memories.
+///
+/// **Serialization**: tagged form (`{quote: "..."}` / `{memory:
+/// "mem-..."}`). NOT `#[serde(untagged)]` — Phase D audit A-M4 burned
+/// us on untagged silent variant-selection.
+///
+/// **Deserialization**: custom impl accepts both plain strings (legacy
+/// TS-shaped lessons) AND the tagged form. Plain strings wrap as
+/// `Quote(_)`. See [`EvidenceRef`]'s `Deserialize` impl.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum EvidenceRef {
+    /// Free-text quote. Legacy form. What Phase D's narrative
+    /// generation produces (the LLM emits strings; the parser wraps
+    /// each as `Quote(_)`).
+    Quote(String),
+    /// Typed reference into the memory store. Engine resolves via
+    /// [`crate::engine::memory::get_by_id`]. Citation increments the
+    /// memory's user-immunity counter when the lesson is
+    /// user-authored.
+    Memory(MemoryId),
+}
+
+impl<'de> Deserialize<'de> for EvidenceRef {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct EvidenceRefVisitor;
+
+        impl<'de> Visitor<'de> for EvidenceRefVisitor {
+            type Value = EvidenceRef;
+
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str(
+                    "a string (legacy quote form) or a map with single key \
+                     `quote` or `memory`",
+                )
+            }
+
+            fn visit_str<E: DeError>(self, v: &str) -> Result<EvidenceRef, E> {
+                Ok(EvidenceRef::Quote(v.to_string()))
+            }
+
+            fn visit_string<E: DeError>(self, v: String) -> Result<EvidenceRef, E> {
+                Ok(EvidenceRef::Quote(v))
+            }
+
+            fn visit_map<A>(self, mut map: A) -> Result<EvidenceRef, A::Error>
+            where
+                A: MapAccess<'de>,
+            {
+                let key: String = map.next_key()?.ok_or_else(|| {
+                    A::Error::invalid_length(
+                        0,
+                        &"map with exactly one key (quote|memory)",
+                    )
+                })?;
+                match key.as_str() {
+                    "quote" => {
+                        let v: String = map.next_value()?;
+                        Ok(EvidenceRef::Quote(v))
+                    }
+                    "memory" => {
+                        let v: String = map.next_value()?;
+                        Ok(EvidenceRef::Memory(MemoryId::new(v)))
+                    }
+                    other => Err(A::Error::unknown_variant(other, &["quote", "memory"])),
+                }
+            }
+        }
+
+        deserializer.deserialize_any(EvidenceRefVisitor)
+    }
+}
+
+impl EvidenceRef {
+    /// Return the underlying string representation regardless of
+    /// variant. Used by Phase D `narrative::validate_invariants` for
+    /// char-count caps + Phase B `gate::check_promotion_gate` for the
+    /// empty-evidence check.
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Quote(s) => s.as_str(),
+            Self::Memory(id) => id.as_str(),
+        }
+    }
+
+    /// True when this ref is a typed `MemoryId` (not a free-text quote).
+    /// Used by Phase E's citation-counter increment hook.
+    pub fn is_memory(&self) -> bool {
+        matches!(self, Self::Memory(_))
+    }
+
+    /// If this is a memory ref, return the underlying `MemoryId`.
+    pub fn as_memory_id(&self) -> Option<&MemoryId> {
+        match self {
+            Self::Memory(id) => Some(id),
+            Self::Quote(_) => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -98,6 +215,51 @@ impl IngestSourceType {
             Self::EccInstinct => "ecc_instinct",
             Self::LearningsMd => "learnings_md",
         }
+    }
+}
+
+/// Phase E D-E11: who authored this lesson? The load-bearing variant
+/// is `User` — user-authored lessons are eviction-immune from any
+/// engine-initiated cleanup path (see
+/// `feedback_user_authored_lessons_immune.md`).
+///
+/// `#[non_exhaustive]` + default = `Llm` for backwards-compat with
+/// TS-shaped lessons predating this field.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum Authorship {
+    /// User explicitly authored / endorsed this lesson. Eviction-
+    /// immune. Citing memories increments their immunity counter.
+    User,
+    /// LLM-generated (Phase D `narrative::generate` etc). Default for
+    /// legacy / TS-shaped lessons missing the field.
+    #[default]
+    Llm,
+    /// Captured by the auto-memory ingest pipeline.
+    AutoMemory,
+    /// Imported from an ECC instinct file.
+    EccInstinct,
+    /// Authorship unknown — explicit placeholder. Engine never
+    /// produces this; accepted on input for explicit-unknown YAML.
+    Unknown,
+}
+
+impl Authorship {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::User => "user",
+            Self::Llm => "llm",
+            Self::AutoMemory => "auto_memory",
+            Self::EccInstinct => "ecc_instinct",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    /// True when authorship is user-driven — triggers the eviction-
+    /// immunity invariant.
+    pub fn is_user(self) -> bool {
+        matches!(self, Self::User)
     }
 }
 
@@ -151,6 +313,12 @@ pub struct LessonFrontmatter {
     // Ingest provenance (Day 2 addition)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ingest_provenance: Option<IngestProvenance>,
+
+    // Phase E D-E11 addition: authorship of this lesson. User-authored
+    // lessons are eviction-immune. Default `Llm` for back-compat with
+    // TS-shaped lessons predating this field.
+    #[serde(default)]
+    pub authored_by: Authorship,
 
     // Always last
     #[serde(default, skip_serializing_if = "Option::is_none")]

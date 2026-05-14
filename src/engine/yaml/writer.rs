@@ -11,7 +11,7 @@
 //! causes git-diff churn on every cross-process mutation.
 
 use super::scalar::render_scalar;
-use super::schema::{CausalNarrative, IngestProvenance, LessonFrontmatter};
+use super::schema::{CausalNarrative, EvidenceRef, IngestProvenance, LessonFrontmatter};
 
 /// Render a `LessonFrontmatter` to YAML text that goes between the
 /// `---` delimiters. Caller wraps in delimiters via `combine_frontmatter`.
@@ -63,6 +63,10 @@ pub fn serialize_lesson_frontmatter(fm: &LessonFrontmatter) -> String {
     if let Some(p) = &fm.ingest_provenance {
         emit_ingest_provenance(&mut out, p);
     }
+
+    // Phase E D-E11: authored_by (emit unconditionally so lessons
+    // converge to the new shape on first write).
+    emit_plain(&mut out, "authored_by", fm.authored_by.as_str());
 
     // Always last
     if let Some(v) = &fm.updated_at {
@@ -141,9 +145,22 @@ fn emit_causal_narrative(out: &mut String, cn: &CausalNarrative) {
     } else {
         out.push_str("  evidence_refs:\n");
         for r in &cn.evidence_refs {
-            out.push_str("    - ");
-            out.push_str(&render_scalar(r, 6));
-            out.push('\n');
+            // Phase E D-E10: emit typed form. Each ref becomes a
+            // one-key map: `- quote: "..."` or `- memory: mem-...`.
+            // Reads accept BOTH this form AND the legacy plain-string
+            // form (per the custom `Deserialize` on `EvidenceRef`).
+            match r {
+                EvidenceRef::Quote(s) => {
+                    out.push_str("    - quote: ");
+                    out.push_str(&render_scalar(s, 8));
+                    out.push('\n');
+                }
+                EvidenceRef::Memory(id) => {
+                    out.push_str("    - memory: ");
+                    out.push_str(id.as_str());
+                    out.push('\n');
+                }
+            }
         }
     }
     out.push_str("  generated_by: ");
@@ -200,6 +217,7 @@ mod tests {
             superseded_by: None,
             superseded_at: None,
             ingest_provenance: None,
+            authored_by: Default::default(),
             updated_at: None,
         }
     }
@@ -270,6 +288,7 @@ mod tests {
             "superseded_by",
             "superseded_at",
             "ingest_provenance",
+            "authored_by",  // Phase E D-E11 addition
             "updated_at",
         ];
         assert_eq!(top_level_keys, expected);
@@ -414,7 +433,7 @@ mod tests {
             failure_mode: "CI red".into(),
             correction: "run typecheck before commit".into(),
             confidence: Confidence::Inferred,
-            evidence_refs: vec!["\"some evidence quote\"".into()],
+            evidence_refs: vec![EvidenceRef::Quote("\"some evidence quote\"".into())],
             generated_by: GeneratedBy::Llm,
             generated_at: "2026-05-13T00:00:00.000Z".into(),
         });

@@ -26,7 +26,7 @@ use crate::engine::error::EngineError;
 use crate::engine::llm::{
     GenerateRequest, LlmClient, LlmError, ResponseFormat,
 };
-use crate::engine::yaml::{CausalNarrative, Confidence, GeneratedBy};
+use crate::engine::yaml::{CausalNarrative, Confidence, EvidenceRef, GeneratedBy};
 
 /// Inputs the caller assembles for [`generate`]. The engine doesn't
 /// own session-window or transcript-extraction logic — the caller
@@ -220,12 +220,24 @@ pub async fn generate(
 
     validate_invariants(&draft)?;
 
+    // The LLM emits strings; Phase E D-E10 makes `evidence_refs`
+    // typed. Wrap each LLM string as `EvidenceRef::Quote(_)`. The LLM
+    // doesn't directly produce `EvidenceRef::Memory(_)` yet — that's
+    // a future capability when the prompt + schema teach the model
+    // to cite memory IDs. For now, all LLM-generated narratives have
+    // quote-shaped evidence refs.
+    let evidence_refs = draft
+        .evidence_refs
+        .into_iter()
+        .map(EvidenceRef::Quote)
+        .collect();
+
     Ok(CausalNarrative {
         trigger: draft.trigger,
         failure_mode: draft.failure_mode,
         correction: draft.correction,
         confidence: draft.confidence,
-        evidence_refs: draft.evidence_refs,
+        evidence_refs,
         generated_by: GeneratedBy::Llm,
         generated_at: now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
     })

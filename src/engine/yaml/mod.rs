@@ -28,6 +28,6 @@ pub use frontmatter::{
     OwnedFrontmatterSplit,
 };
 pub use schema::{
-    CausalNarrative, Confidence, GeneratedBy, IngestProvenance, IngestSourceType,
-    LessonFrontmatter, LessonStatus,
+    Authorship, CausalNarrative, Confidence, EvidenceRef, GeneratedBy, IngestProvenance,
+    IngestSourceType, LessonFrontmatter, LessonStatus,
 };

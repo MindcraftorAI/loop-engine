@@ -21,7 +21,9 @@ fn matches_ts_load_path_byte_output() {
             failure_mode: "CI red on next push".into(),
             correction: "run npm run typecheck before commit".into(),
             confidence: loop_daemon::yaml::reader::__expose_confidence_inferred(),
-            evidence_refs: vec!["\"CI broke again\"".into()],
+            evidence_refs: vec![loop_daemon::engine::yaml::EvidenceRef::Quote(
+                "\"CI broke again\"".into(),
+            )],
             generated_by: loop_daemon::yaml::reader::__expose_generated_by_llm(),
             generated_at: "2026-05-13T00:00:00.000Z".into(),
         }),
@@ -42,6 +44,7 @@ fn matches_ts_load_path_byte_output() {
             source_external_id: Some("feedback-typecheck".into()),
             extracted_at: "2026-05-13T00:00:00.000Z".into(),
         }),
+        authored_by: Default::default(),
         updated_at: Some("2026-05-13T01:30:00.000Z".into()),
     };
 
@@ -60,7 +63,7 @@ causal_narrative:
   correction: run npm run typecheck before commit
   confidence: inferred
   evidence_refs:
-    - \"\\\"CI broke again\\\"\"
+    - quote: \"\\\"CI broke again\\\"\"
   generated_by: llm
   generated_at: 2026-05-13T00:00:00.000Z
 target_skill: testing-discipline
@@ -80,6 +83,7 @@ ingest_provenance:
   source_path: /Users/x/.claude/projects/-Users-x-loop/memory/feedback_typecheck.md
   source_external_id: feedback-typecheck
   extracted_at: 2026-05-13T00:00:00.000Z
+authored_by: llm
 updated_at: 2026-05-13T01:30:00.000Z
 ";
 

@@ -19,12 +19,14 @@ pub mod lessons;
 pub mod lifecycle;
 pub mod llm;
 pub mod manifest;
+pub mod memory;
 pub mod paths;
 pub mod pid;
 pub mod sentiment;
 pub mod storage;
 #[cfg(test)]
 pub mod test_support;
+pub mod vector;
 pub mod yaml;
 
 pub use error::EngineError;
@@ -48,9 +50,17 @@ pub use llm::{
     FinishReason, GenerateRequest, Generation, LlmClient, LlmError, ResponseFormat, TokenUsage,
 };
 pub use manifest::{assemble, ActiveLesson, AssembleConfig, AssemblyStats, Manifest};
+// Phase E memory + vector types — surfaces via Manifest and the new
+// `engine::memory` / `engine::vector` modules.
+pub use memory::{
+    Memory, MemoryFrontmatter, MemoryId, MemoryQuery, MemoryRef, PruneStats,
+};
 pub use storage::{
     LocalFsStorage, MemoryStorage, Storage, StorageError, StorageKey, StorageMetadata, Version,
 };
+pub use vector::{SearchHit, VectorIndex, VectorIndexError};
 // `LessonStatus` is a public field of `ActiveLesson` (and `AssembleConfig`
 // holds a `Vec<LessonStatus>`), so it belongs in the prelude.
-pub use yaml::LessonStatus;
+// `Authorship` + `EvidenceRef` are public fields of `LessonFrontmatter`
+// (Phase E D-E10/E11 additive changes).
+pub use yaml::{Authorship, EvidenceRef, LessonStatus};
