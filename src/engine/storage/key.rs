@@ -49,6 +49,20 @@ impl StorageKey {
         Self(prefixed(ctx, &suffix))
     }
 
+    /// Memory file (Phase E). Single-user: `memories/<id>.md`;
+    /// multi-tenant: `tenants/.../memories/<id>.md`. Mirrors lesson
+    /// layout but flat — memories don't have a status hierarchy.
+    pub fn memory(ctx: &Context, id: &str) -> Self {
+        let suffix = format!("memories/{id}.md");
+        Self(prefixed(ctx, &suffix))
+    }
+
+    /// Prefix key for listing all memories (Phase E). Used by prune
+    /// + recompute_citation_counts.
+    pub fn memories_prefix(ctx: &Context) -> Self {
+        Self(prefixed(ctx, "memories"))
+    }
+
     /// Prefix key for listing all lessons in a given status directory.
     /// Used by Day 17 solicitor for scan-by-status. Single-user:
     /// `lessons/<status>`; multi-tenant: `tenants/.../lessons/<status>`.

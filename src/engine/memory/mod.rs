@@ -22,8 +22,15 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 pub mod id;
+pub mod store;
 
 pub use id::MemoryId;
+// `decrement_citation_count` is `pub(crate)` — Phase G consumes from
+// within the engine; not part of the external API.
+pub use store::{
+    delete, get_by_id, get_by_id_with_embedding, increment_citation_count, insert, prune,
+    search,
+};
 
 /// YAML frontmatter for a memory file on disk. Mirrors
 /// [`crate::engine::yaml::LessonFrontmatter`] for symmetry.
