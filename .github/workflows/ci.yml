@@ -32,14 +32,15 @@ jobs:
   public-api:
     name: public-api stability gate
     runs-on: ubuntu-latest
-    # Advisory only until v1.0 baseline lands. Flip continue-on-error
-    # to false once `public-api-v1.0.txt` is committed.
-    continue-on-error: true
+    # Baseline `public-api-v1.0.txt` is committed; this gate is now
+    # load-bearing for SemVer durability.
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@nightly
       - uses: Swatinem/rust-cache@v2
       - name: install cargo-public-api
         run: cargo install --locked cargo-public-api
-      - name: public-api diff
-        run: cargo public-api diff
+      - name: diff against v1.0 baseline
+        run: |
+          cargo public-api --simplified > public-api-current.txt
+          diff public-api-v1.0.txt public-api-current.txt

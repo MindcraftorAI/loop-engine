@@ -83,4 +83,4 @@ Four-layer ratchet (B/E2/F/G) defended end-to-end by:
   sidecar are flagged UNSTABLE in v1.0 — may graduate to typed events
   in v1.1.
 
-[1.0.0]: https://github.com/RankLabsDev/loop-engine/releases/tag/v1.0.0
+[1.0.0]: https://github.com/MindcraftorAI/loop-engine/releases/tag/v1.0.0
