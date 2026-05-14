@@ -59,6 +59,10 @@ pub(crate) mod sealed {
     /// Private marker — external crates cannot satisfy this, so they
     /// cannot implement [`super::Embedder`] directly. Monolith
     /// adapters land via the workspace pattern.
+    ///
+    /// TODO(Phase H pre-release): same cross-crate sealed-trait
+    /// decision applies as in [`crate::engine::llm::sealed::Sealed`].
+    /// Until resolved, only engine-shipped impls can satisfy this.
     pub trait Sealed {}
 }
 

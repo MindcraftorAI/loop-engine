@@ -118,32 +118,55 @@ async fn narrative_generation_produces_struct_consumed_by_manifest_gate() {
     let key = StorageKey::lesson(&ctx, "active", id);
     storage.put(&key, Bytes::from(new_content)).await.unwrap();
 
-    // 5. Re-assemble — gate should NO LONGER fire MissingCausalNarrative.
+    // 5. Re-assemble — gate must transition from
+    //    `Block(MissingCausalNarrative + ...)` to a state where the
+    //    narrative-related reasons are gone. The seeded fixture
+    //    deliberately has `created_at: 2026-05-11` (2 days before
+    //    `now()`) while MemoryStorage stamps birthtime at wall-clock
+    //    write time — so `TamperedAge` will fire and gate stays
+    //    `Block`. The audit (A-M1) requires we assert this EXACT
+    //    shape, not just "Promote or Block".
     let mut config_after = AssembleConfig::default();
     config_after.record_applied = false;
     let m_after = assemble(&ctx, storage.as_ref(), &config_after, now())
-    .await
-    .unwrap();
-    let gate_after = m_after.active_lessons[0].gate.as_ref().expect("gate");
+        .await
+        .unwrap();
+    let gate_after = m_after.active_lessons[0]
+        .gate
+        .as_ref()
+        .expect("gate annotation present");
     match gate_after {
         GateDecision::Block { reasons } => {
-            // Whatever reasons remain (TamperedAge, etc — birthtime is
-            // wall-clock now vs frontmatter 2026-05-11), at MINIMUM the
-            // narrative-related reasons are gone.
-            assert!(!reasons
-                .iter()
-                .any(|r| matches!(r, BlockReason::MissingCausalNarrative)));
-            assert!(!reasons
-                .iter()
-                .any(|r| matches!(r, BlockReason::SpeculativeNarrative)));
+            // Narrative-related blocks MUST be gone (the pipeline
+            // delivered + persisted a valid narrative).
+            assert!(
+                !reasons
+                    .iter()
+                    .any(|r| matches!(r, BlockReason::MissingCausalNarrative)),
+                "MissingCausalNarrative should be GONE after persisting a narrative; \
+                 reasons={reasons:?}"
+            );
+            assert!(
+                !reasons
+                    .iter()
+                    .any(|r| matches!(r, BlockReason::SpeculativeNarrative)),
+                "SpeculativeNarrative should not fire on Inferred narrative; \
+                 reasons={reasons:?}"
+            );
+            // The remaining block IS TamperedAge — birthtime mismatch
+            // vs the seeded backdated created_at. Asserting this proves
+            // the wedge end-to-end through the manifest layer.
+            assert!(
+                reasons
+                    .iter()
+                    .any(|r| matches!(r, BlockReason::TamperedAge { .. })),
+                "expected TamperedAge to remain (birthtime > frontmatter created_at); \
+                 reasons={reasons:?}"
+            );
         }
-        // If the gate now passes outright (no birthtime tampering on
-        // this in-memory backend → tamper check passed too), the
-        // pipeline is fully wired.
-        GateDecision::Promote { .. } => {}
-        // Wildcard required because GateDecision is #[non_exhaustive]
-        // from external-crate perspective (engine v1.0 SemVer-locks).
-        _ => {}
+        other => panic!(
+            "expected Block (TamperedAge remains after narrative persist), got {other:?}"
+        ),
     }
 }
 
@@ -151,8 +174,17 @@ async fn narrative_generation_produces_struct_consumed_by_manifest_gate() {
 async fn narrative_validation_failure_does_not_persist() {
     // Defense-in-depth check: when narrative::generate's parse-time
     // validator rejects an LLM response (the wedge invariant), the
-    // caller gets EngineError::Llm(_) and the lesson on storage is
-    // unchanged. The manifest stays blocked on MissingCausalNarrative.
+    // caller gets `EngineError::Llm(_)` and the lesson on storage is
+    // unchanged. Re-assembling the manifest after the rejected
+    // generation must STILL surface `MissingCausalNarrative` —
+    // audit A-M3 fix: the original test only checked
+    // `narrative.is_none()` on storage, which is tautological because
+    // `narrative::generate` has no storage arg. The re-assemble is
+    // the actual end-to-end claim.
+    use loop_daemon::engine::lessons::{BlockReason, GateDecision};
+    use loop_daemon::engine::manifest::assemble;
+    use loop_daemon::engine::manifest::AssembleConfig as Cfg;
+
     let ctx = Context::single_user_local();
     let storage: Arc<dyn Storage> = Arc::new(MemoryStorage::default());
     let id = "les-e2etest2";
@@ -178,9 +210,28 @@ async fn narrative_validation_failure_does_not_persist() {
     .await;
     assert!(result.is_err(), "validation should have failed");
 
-    // Lesson on storage is untouched — gate still missing narrative.
+    // Storage-level invariant: lesson body unchanged.
     let loaded = get_by_id(&ctx, storage.as_ref(), id).await.unwrap().unwrap();
     assert!(loaded.frontmatter.causal_narrative.is_none());
+
+    // End-to-end invariant: manifest assembly still surfaces
+    // MissingCausalNarrative — the wedge stays blocked because the
+    // rejected narrative was never persisted.
+    let mut config = Cfg::default();
+    config.record_applied = false;
+    let m = assemble(&ctx, storage.as_ref(), &config, now()).await.unwrap();
+    let gate = m.active_lessons[0].gate.as_ref().expect("gate");
+    match gate {
+        GateDecision::Block { reasons } => {
+            assert!(
+                reasons
+                    .iter()
+                    .any(|r| matches!(r, BlockReason::MissingCausalNarrative)),
+                "manifest should still surface MissingCausalNarrative; reasons={reasons:?}"
+            );
+        }
+        other => panic!("expected Block (no narrative persisted), got {other:?}"),
+    }
 }
 
 #[tokio::test]

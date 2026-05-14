@@ -8,6 +8,8 @@
 
 #![cfg(any(test, feature = "test-fixtures"))]
 
+use std::collections::VecDeque;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 use async_trait::async_trait;
@@ -18,12 +20,14 @@ use crate::engine::llm::request::GenerateRequest;
 use crate::engine::llm::response::{FinishReason, Generation};
 use crate::engine::llm::{sealed::Sealed, LlmClient};
 
+/// Phase D audit A-M2 fix: aligned with `MockSentimentClassifier`
+/// precedent — `VecDeque` for O(1) FIFO drain (was `Vec::remove(0)`
+/// at O(n)) and `AtomicUsize` for the counter (was `Mutex<usize>` —
+/// no reason to lock for a single increment).
 #[derive(Debug, Default)]
 pub struct MockLlmClient {
-    /// FIFO of pre-staged responses. Drained one-per-call.
-    responses: Mutex<Vec<Result<Generation, LlmError>>>,
-    /// Observable call counter — survives across response-queue drain.
-    call_count: Mutex<usize>,
+    responses: Mutex<VecDeque<Result<Generation, LlmError>>>,
+    call_count: AtomicUsize,
 }
 
 impl MockLlmClient {
@@ -32,7 +36,7 @@ impl MockLlmClient {
         self.responses
             .lock()
             .expect("MockLlmClient mutex poisoned")
-            .push(Ok(generation));
+            .push_back(Ok(generation));
         self
     }
 
@@ -41,7 +45,7 @@ impl MockLlmClient {
         self.responses
             .lock()
             .expect("MockLlmClient mutex poisoned")
-            .push(Err(err));
+            .push_back(Err(err));
         self
     }
 
@@ -49,10 +53,7 @@ impl MockLlmClient {
     /// queue is drained — assertions can verify exact call count even
     /// when the test stages 0 responses (silent-fallback mode).
     pub fn call_count(&self) -> usize {
-        *self
-            .call_count
-            .lock()
-            .expect("MockLlmClient mutex poisoned")
+        self.call_count.load(Ordering::Relaxed)
     }
 }
 
@@ -65,31 +66,23 @@ impl LlmClient for MockLlmClient {
         _ctx: &Context,
         _request: &GenerateRequest,
     ) -> Result<Generation, LlmError> {
-        {
-            let mut n = self
-                .call_count
-                .lock()
-                .expect("MockLlmClient mutex poisoned");
-            *n += 1;
-        }
+        self.call_count.fetch_add(1, Ordering::Relaxed);
         let mut queue = self
             .responses
             .lock()
             .expect("MockLlmClient mutex poisoned");
-        if queue.is_empty() {
-            // Silent fallback — empty queue produces a debug stub so
-            // tests staging zero responses don't panic. Mirrors the
-            // `MockSentimentClassifier` policy.
-            return Ok(Generation {
-                text: "[MockLlmClient empty-queue stub]".to_string(),
-                parsed: None,
-                finish_reason: FinishReason::Stop,
-                usage: None,
-            });
+        if let Some(staged) = queue.pop_front() {
+            return staged;
         }
-        // FIFO — remove(0) keeps insertion order matching what tests
-        // staged. Cost is O(n) but queue length is small in tests.
-        queue.remove(0)
+        // Silent fallback — empty queue produces a debug stub so tests
+        // staging zero responses don't panic. Mirrors the
+        // `MockSentimentClassifier` policy.
+        Ok(Generation {
+            text: "[MockLlmClient empty-queue stub]".to_string(),
+            parsed: None,
+            finish_reason: FinishReason::Stop,
+            usage: None,
+        })
     }
 }
 

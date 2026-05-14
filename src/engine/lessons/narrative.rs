@@ -128,22 +128,6 @@ Rules:
 
 If the description is too generic to ground (any session would match), return {\"error\": \"insufficient_context\"} instead.";
 
-/// Discriminated parse of the LLM's structured output. The LLM returns
-/// EITHER a populated narrative OR a refusal object.
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
-enum NarrativeLlmOutput {
-    /// Successful narrative draft. Field set matches `CausalNarrative`
-    /// minus `generated_by` and `generated_at` (which the engine
-    /// stamps post-LLM).
-    Success(NarrativeDraft),
-    /// LLM refused to ground the narrative.
-    Refusal {
-        #[allow(dead_code)] // payload retained for future logging
-        error: String,
-    },
-}
-
 #[derive(Debug, Deserialize)]
 struct NarrativeDraft {
     trigger: String,
@@ -152,6 +136,31 @@ struct NarrativeDraft {
     confidence: Confidence,
     #[serde(default)]
     evidence_refs: Vec<String>,
+}
+
+/// Discriminate between a successful narrative and a refusal sentinel.
+///
+/// Phase D audit A-M4 fix: explicit `error`-key check BEFORE attempting
+/// to parse as a `NarrativeDraft`. The original implementation used
+/// `serde(untagged)` over `{ Success, Refusal }`, which would silently
+/// pick `Success` for a mixed-shape response (model returns BOTH the
+/// narrative fields AND `error`) because the serde(untagged) walker
+/// tries variants in declaration order and accepts the first that
+/// deserializes. Refusal discrimination is the wedge-trust hinge —
+/// "the model refused" must NEVER be mistaken for "the model gave a
+/// valid narrative."
+fn discriminate_output(
+    parsed: serde_json::Value,
+) -> Result<NarrativeDraft, EngineError> {
+    // Refusal sentinel: presence of `error` is dispositive. Even if
+    // the response ALSO contains valid-looking narrative fields, the
+    // model self-marked the output as a refusal — respect that signal.
+    if parsed.get("error").is_some() {
+        return Err(EngineError::NarrativeInsufficientContext);
+    }
+    serde_json::from_value::<NarrativeDraft>(parsed).map_err(|e| {
+        EngineError::from(LlmError::InvalidOutput(format!("narrative parse: {e}")))
+    })
 }
 
 /// Generate a `CausalNarrative` for a lesson. Caller supplies the
@@ -204,16 +213,10 @@ pub async fn generate(
         ))
     })?;
 
-    let output: NarrativeLlmOutput = serde_json::from_value(parsed).map_err(|e| {
-        EngineError::from(LlmError::InvalidOutput(format!("narrative parse: {e}")))
-    })?;
-
-    let draft = match output {
-        NarrativeLlmOutput::Refusal { .. } => {
-            return Err(EngineError::NarrativeInsufficientContext);
-        }
-        NarrativeLlmOutput::Success(d) => d,
-    };
+    // Audit A-M4 fix: explicit refusal discrimination by `error` key
+    // presence, NOT serde(untagged) variant ordering. See
+    // [`discriminate_output`].
+    let draft = discriminate_output(parsed)?;
 
     validate_invariants(&draft)?;
 
@@ -379,6 +382,38 @@ mod tests {
         )
         .await;
         assert!(matches!(r, Err(EngineError::NarrativeInsufficientContext)));
+    }
+
+    /// Phase D audit A-M4 regression: a mixed-shape response (both
+    /// `error` AND valid narrative fields populated) MUST be treated
+    /// as a refusal — the model's self-marked refusal signal wins
+    /// over a coincidentally-valid field set. The original
+    /// `serde(untagged)` discriminator would have silently selected
+    /// `Success` here.
+    #[tokio::test]
+    async fn generate_mixed_shape_with_error_key_treated_as_refusal() {
+        let json = r#"{
+            "error": "insufficient_context",
+            "trigger": "looks valid but the model said refusal",
+            "failure_mode": "f",
+            "correction": "c",
+            "confidence": "inferred",
+            "evidence_refs": []
+        }"#;
+        let mock = MockLlmClient::default().with_response(success_generation(json));
+        let r = generate(
+            &ctx(),
+            &mock,
+            &narrative_ctx(),
+            &NarrativeConfig::default(),
+            now(),
+        )
+        .await;
+        assert!(
+            matches!(r, Err(EngineError::NarrativeInsufficientContext)),
+            "wedge-trust: presence of `error` MUST win over narrative fields. \
+             Got: {r:?}"
+        );
     }
 
     #[tokio::test]

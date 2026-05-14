@@ -12,6 +12,8 @@
 
 #![cfg(any(test, feature = "test-fixtures"))]
 
+use std::collections::VecDeque;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 use async_trait::async_trait;
@@ -20,11 +22,13 @@ use crate::engine::context::Context;
 use crate::engine::embedding::error::EmbeddingError;
 use crate::engine::embedding::{sealed::Sealed, Embedder};
 
+/// Phase D audit A-M2 fix: VecDeque + AtomicUsize matching the
+/// `MockSentimentClassifier` precedent.
 #[derive(Debug)]
 pub struct MockEmbedder {
     dimensions: usize,
-    responses: Mutex<Vec<Result<Vec<Vec<f32>>, EmbeddingError>>>,
-    call_count: Mutex<usize>,
+    responses: Mutex<VecDeque<Result<Vec<Vec<f32>>, EmbeddingError>>>,
+    call_count: AtomicUsize,
 }
 
 impl MockEmbedder {
@@ -33,8 +37,8 @@ impl MockEmbedder {
     pub fn new(dimensions: usize) -> Self {
         Self {
             dimensions,
-            responses: Mutex::new(Vec::new()),
-            call_count: Mutex::new(0),
+            responses: Mutex::new(VecDeque::new()),
+            call_count: AtomicUsize::new(0),
         }
     }
 
@@ -45,7 +49,7 @@ impl MockEmbedder {
         self.responses
             .lock()
             .expect("MockEmbedder mutex poisoned")
-            .push(Ok(vectors));
+            .push_back(Ok(vectors));
         self
     }
 
@@ -54,16 +58,13 @@ impl MockEmbedder {
         self.responses
             .lock()
             .expect("MockEmbedder mutex poisoned")
-            .push(Err(err));
+            .push_back(Err(err));
         self
     }
 
     /// How many times has `embed` been called?
     pub fn call_count(&self) -> usize {
-        *self
-            .call_count
-            .lock()
-            .expect("MockEmbedder mutex poisoned")
+        self.call_count.load(Ordering::Relaxed)
     }
 }
 
@@ -76,26 +77,20 @@ impl Embedder for MockEmbedder {
         _ctx: &Context,
         texts: &[String],
     ) -> Result<Vec<Vec<f32>>, EmbeddingError> {
-        {
-            let mut n = self
-                .call_count
-                .lock()
-                .expect("MockEmbedder mutex poisoned");
-            *n += 1;
-        }
+        self.call_count.fetch_add(1, Ordering::Relaxed);
         let mut queue = self
             .responses
             .lock()
             .expect("MockEmbedder mutex poisoned");
-        if queue.is_empty() {
-            // Empty-queue fallback: one all-zeros vector per input
-            // text, at the configured dimension. Lets tests verify
-            // "embed got called" without staging responses.
-            return Ok((0..texts.len())
-                .map(|_| vec![0.0_f32; self.dimensions])
-                .collect());
+        if let Some(staged) = queue.pop_front() {
+            return staged;
         }
-        queue.remove(0)
+        // Empty-queue fallback: one all-zeros vector per input text,
+        // at the configured dimension. Lets tests verify "embed got
+        // called" without staging responses.
+        Ok((0..texts.len())
+            .map(|_| vec![0.0_f32; self.dimensions])
+            .collect())
     }
 
     fn dimensions(&self) -> usize {

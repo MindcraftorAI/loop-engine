@@ -71,6 +71,16 @@ pub(crate) mod sealed {
     /// cannot implement [`super::LlmClient`] directly. Monolith
     /// adapters land via the workspace pattern (see Phase D
     /// learn-notes OQ-D3 resolution).
+    ///
+    /// TODO(Phase H pre-release): if the monolith repo requires
+    /// cross-crate impls before v1.0 ships, this module's visibility
+    /// must be revisited. Two options on the table — (a) workspace
+    /// pattern where the monolith path-deps loop-engine and uses
+    /// `pub use loop_engine::engine::llm::sealed::Sealed`, then
+    /// satisfies the marker for its provider types; or (b) a
+    /// `host-providers` Cargo feature gate on the engine that flips
+    /// this to `pub mod sealed`. Until decided, the engine remains
+    /// the only crate that can produce `LlmClient` impls.
     pub trait Sealed {}
 }
 
