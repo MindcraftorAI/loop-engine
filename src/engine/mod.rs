@@ -69,14 +69,22 @@ pub use memory::{
     MemoryId, MemoryQuery, MemoryRef, MemoryScope, MemoryScopeFilter, PrunePredicate,
     PruneStats, RecomputeStats,
 };
-pub use personas::{Persona, PersonaFrontmatter, PersonaRef, PersonaStatus};
+pub use personas::{
+    archive as archive_persona, delete as delete_persona, get_by_id as get_persona_by_id,
+    insert as insert_persona, list as list_personas, update as update_persona, Persona,
+    PersonaFrontmatter, PersonaRef, PersonaStatus,
+};
 pub use skills::{
     archive as archive_skill, delete as delete_skill, get_by_id as get_skill_by_id,
     insert as insert_skill, list as list_skills, update as update_skill, ActivationMode,
     ContextMode, EffortLevel, HookEvent, HookHandler, HookMatcherGroup, Skill,
     SkillFrontmatter, SkillRef, SkillStatus, SkillType,
 };
-pub use teams::{Team, TeamFrontmatter, TeamMember, TeamRef, TeamStatus};
+pub use teams::{
+    archive as archive_team, delete as delete_team, get_by_id as get_team_by_id,
+    insert as insert_team, list as list_teams, update as update_team, Team, TeamFrontmatter,
+    TeamMember, TeamRef, TeamStatus,
+};
 pub use storage::{
     LocalFsStorage, MemoryStorage, Storage, StorageError, StorageKey, StorageMetadata, Version,
 };

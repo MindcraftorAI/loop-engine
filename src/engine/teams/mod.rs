@@ -10,6 +10,9 @@ use serde::ser::Serializer;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
+pub mod store;
+pub use store::{archive, delete, get_by_id, insert, list, update};
+
 /// Phase F D-F6: typed team member discriminator.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "id", rename_all = "snake_case")]
