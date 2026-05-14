@@ -71,8 +71,10 @@ pub use memory::{
 };
 pub use personas::{Persona, PersonaFrontmatter, PersonaRef, PersonaStatus};
 pub use skills::{
-    ActivationMode, ContextMode, EffortLevel, HookEvent, HookHandler, HookMatcherGroup,
-    Skill, SkillFrontmatter, SkillRef, SkillStatus, SkillType,
+    archive as archive_skill, delete as delete_skill, get_by_id as get_skill_by_id,
+    insert as insert_skill, list as list_skills, update as update_skill, ActivationMode,
+    ContextMode, EffortLevel, HookEvent, HookHandler, HookMatcherGroup, Skill,
+    SkillFrontmatter, SkillRef, SkillStatus, SkillType,
 };
 pub use teams::{Team, TeamFrontmatter, TeamMember, TeamRef, TeamStatus};
 pub use storage::{

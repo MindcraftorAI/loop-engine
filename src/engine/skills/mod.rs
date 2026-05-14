@@ -22,9 +22,11 @@ use serde::{Deserialize, Serialize};
 
 pub mod hooks;
 pub mod r#ref;
+pub mod store;
 
 pub use hooks::{HookEvent, HookHandler, HookMatcherGroup};
 pub use r#ref::SkillRef;
+pub use store::{archive, delete, get_by_id, insert, list, update};
 
 /// Phase F D-F4: how a skill becomes active in a session.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
