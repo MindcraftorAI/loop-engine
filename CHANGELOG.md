@@ -65,6 +65,14 @@ via `#[non_exhaustive]` on all public types.
 - **JSONL watcher** (`host::claude_code`): Claude Code adapter that
   parses session transcripts and emits engine events.
 
+- **`serve` subcommand — JSON-RPC over stdio**: `loop-engine serve`
+  exposes the engine as a programmatic RPC endpoint for host
+  adapters (opensquid MCP server, future TS/Python launchers). Line-
+  delimited JSON-RPC 2.0 on stdin/stdout; stderr stays free for
+  diagnostics. v1 methods: `ping`, `lesson.create`, `lesson.recall`,
+  `lesson.promote`, `lesson.discard`. Memory + manifest + skill/
+  persona/team methods land alongside the embedder integration.
+
 ### Wedge defense
 
 Four-layer ratchet (B/E2/F/G) defended end-to-end by:
