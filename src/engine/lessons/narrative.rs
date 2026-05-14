@@ -45,6 +45,34 @@ pub struct NarrativeContext {
     pub transcript_excerpt: Option<String>,
 }
 
+impl NarrativeContext {
+    /// Construct with only the required `description`. External crates
+    /// (the monolith MCP adapter, tests outside the engine) need this
+    /// because `#[non_exhaustive]` forbids struct-literal construction
+    /// from outside the defining crate.
+    pub fn new(description: impl Into<String>) -> Self {
+        Self {
+            description: description.into(),
+            source_feedback: None,
+            transcript_excerpt: None,
+        }
+    }
+
+    /// Builder: attach source-feedback context.
+    #[must_use]
+    pub fn with_source_feedback(mut self, source_feedback: impl Into<String>) -> Self {
+        self.source_feedback = Some(source_feedback.into());
+        self
+    }
+
+    /// Builder: attach transcript-excerpt context.
+    #[must_use]
+    pub fn with_transcript_excerpt(mut self, transcript_excerpt: impl Into<String>) -> Self {
+        self.transcript_excerpt = Some(transcript_excerpt.into());
+        self
+    }
+}
+
 /// Configuration knobs for [`generate`]. `Default` ships D-D9 values.
 /// `#[non_exhaustive]` — future cycles add knobs without SemVer break.
 #[derive(Debug, Clone)]

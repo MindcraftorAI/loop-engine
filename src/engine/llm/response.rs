@@ -27,6 +27,52 @@ pub struct Generation {
     pub usage: Option<TokenUsage>,
 }
 
+impl Generation {
+    /// Construct with only the required `text`. `parsed = None`,
+    /// `finish_reason = Stop`, `usage = None`. Adapter impls building
+    /// a `Generation` from a provider response use this + the
+    /// builders below.
+    pub fn new(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            parsed: None,
+            finish_reason: FinishReason::Stop,
+            usage: None,
+        }
+    }
+
+    /// Builder: attach parsed structured-output JSON.
+    #[must_use]
+    pub fn with_parsed(mut self, parsed: serde_json::Value) -> Self {
+        self.parsed = Some(parsed);
+        self
+    }
+
+    /// Builder: set the finish reason.
+    #[must_use]
+    pub fn with_finish_reason(mut self, finish_reason: FinishReason) -> Self {
+        self.finish_reason = finish_reason;
+        self
+    }
+
+    /// Builder: attach token usage.
+    #[must_use]
+    pub fn with_usage(mut self, usage: TokenUsage) -> Self {
+        self.usage = Some(usage);
+        self
+    }
+}
+
+impl TokenUsage {
+    /// Construct from input + output counts.
+    pub fn new(input_tokens: u64, output_tokens: u64) -> Self {
+        Self {
+            input_tokens,
+            output_tokens,
+        }
+    }
+}
+
 /// Why a `Generation` stopped producing tokens.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
