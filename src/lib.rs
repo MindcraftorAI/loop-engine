@@ -19,6 +19,7 @@ pub mod host;
 pub mod cli;
 pub mod config;
 pub mod observability;
+pub mod serve;
 
 // Backward-compat re-exports (Day 14 Phase 1 — delegating wrappers).
 //

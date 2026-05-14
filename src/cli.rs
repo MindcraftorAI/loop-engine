@@ -27,4 +27,11 @@ pub enum Command {
     Status,
     /// Send SIGTERM to the running daemon.
     Stop,
+    /// Serve as a JSON-RPC 2.0 endpoint over stdio. Other processes
+    /// (notably the opensquid MCP server) spawn this and drive the
+    /// engine programmatically. Method surface lives in `serve.rs`.
+    ///
+    /// Protocol: line-delimited JSON-RPC 2.0 over stdin/stdout.
+    /// Diagnostics go to stderr.
+    Serve,
 }

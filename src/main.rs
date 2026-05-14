@@ -37,7 +37,19 @@ fn dispatch(cli: Cli) -> Result<ExitCode> {
         }
         Command::Status => status(),
         Command::Stop => stop(),
+        Command::Serve => serve(),
     }
+}
+
+fn serve() -> Result<ExitCode> {
+    // Init logging to stderr so JSON-RPC stdout stays clean.
+    observability::init_foreground()?;
+    paths::ensure_loop_dirs()?;
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    runtime.block_on(loop_engine::serve::run())?;
+    Ok(ExitCode::SUCCESS)
 }
 
 fn run_foreground() -> Result<ExitCode> {
