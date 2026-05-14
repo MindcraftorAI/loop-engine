@@ -7,6 +7,50 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **`MemoryOrigin`** + optional `origin` block on `MemoryFrontmatter`
+  (`engine::memory::origin`): provenance metadata — host, session_id,
+  model, cwd_basename, written_at. All fields `Option<String>` so
+  partial-detect hosts round-trip cleanly. v0.3.1 memories without
+  the block load as `origin: None` via `#[serde(default)]`.
+
+- **`insert_with_provenance()`** (`engine::memory::store`): the
+  deepest write-path, taking both scope + optional origin.
+  `insert_scoped` now delegates to it with `origin = None` so
+  existing v0.3.1 call sites are zero-impact.
+
+- **`update()`** (`engine::memory::store`): mutate description /
+  content / scope on an existing memory. Identity (`id`, `created_at`,
+  `consumed_by_user_lessons`, `derived_from`, `origin`) is always
+  preserved. Re-embeds + replaces the vector index entry on content
+  change; description/scope-only edits skip the embed path. Returns
+  `Ok(None)` if the id doesn't exist; user-immunity invariant does
+  not fire (citation chain unchanged by edits).
+
+- **`memory.create` RPC** accepts optional `origin` (mirrors
+  `MemoryOrigin` serde). **`memory.get` RPC** response now includes
+  `origin` (null for pre-v0.4 memories).
+
+- **`memory.update` RPC** — wraps `store::update`. Requires at least
+  one of `description` / `content` / `scope`. Returns the updated
+  frontmatter shape (`updated_at` reflects the edit timestamp).
+
+- **`memory.delete` RPC** — the user-facing `forget` operation. Wraps
+  the existing `store::delete`. Default `force = false` respects
+  user-immunity (returns the new `DispatchError::UserMemoryImmune` →
+  RPC error code `-32003`). Force=true bypass is the user-initiated
+  override.
+
+The wedge gate's v0.4+ `origin_diverse` signal (multi-session
+reproducibility = harder to fake) consumes the origin fields. The
+engine ships the storage half; the gate-side counting lands in a
+later v0.4 cycle.
+
+---
+
 ## [1.0.0] — 2026-05-14
 
 First stable release. Engine surface is committed to SemVer; sealed

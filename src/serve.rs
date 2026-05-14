@@ -12,9 +12,11 @@
 //! - `lesson.recall`     — text-match search across lessons
 //! - `lesson.promote`    — gate-check + transition to `promoted/`
 //! - `lesson.discard`    — transition to `discarded/` (immunity-respecting)
-//! - `memory.create`     — embed + persist a raw memory (accepts optional `scope`)
+//! - `memory.create`     — embed + persist a raw memory (accepts optional `scope`, `origin`)
 //! - `memory.search`     — semantic recall (accepts `include_body`, `scope_filter`)
-//! - `memory.get`        — fetch a memory by id (returns FULL content)
+//! - `memory.get`        — fetch a memory by id (returns FULL content + scope + origin)
+//! - `memory.update`     — mutate description/content/scope; re-embeds on content change
+//! - `memory.delete`     — `forget` (force=true required to bypass user-immunity)
 //!
 //! Manifest assembly + skill/persona/team ops land in a follow-on
 //! serve cycle.
@@ -36,9 +38,10 @@ use crate::engine::lessons::gate::PromotionConfig;
 use crate::engine::lessons::loader::get_by_id as load_lesson;
 use crate::engine::lessons::transitions::{discard, promote};
 use crate::engine::memory::{
-    get_by_id as memory_get_by_id, insert_scoped as memory_insert_scoped,
-    rehydrate_vector_index, search as memory_search, MemoryId, MemoryQuery, MemoryScope,
-    MemoryScopeFilter,
+    delete as memory_delete, get_by_id as memory_get_by_id,
+    insert_with_provenance as memory_insert_with_provenance, rehydrate_vector_index,
+    search as memory_search, update as memory_update, MemoryId, MemoryOrigin, MemoryQuery,
+    MemoryScope, MemoryScopeFilter,
 };
 use crate::engine::paths;
 use crate::engine::storage::filesystem::LocalFsStorage;
@@ -224,6 +227,12 @@ async fn process_line(
             "not found",
             json!({ "id": id }),
         ),
+        Err(DispatchError::UserMemoryImmune { id, cited_by }) => err_with_data(
+            req.id,
+            -32003,
+            "user-cited memory is eviction-immune",
+            json!({ "memory_id": id, "cited_by": cited_by }),
+        ),
         Err(DispatchError::Other(e)) => err(req.id, -32603, format!("internal: {e:#}")),
     }
 }
@@ -236,6 +245,7 @@ enum DispatchError {
     NotFound(String),
     PromotionBlocked(Vec<String>),
     UserLessonImmune(String),
+    UserMemoryImmune { id: String, cited_by: u32 },
     Other(anyhow::Error),
 }
 
@@ -262,6 +272,8 @@ async fn dispatch(
         "memory.create" => memory_create(params, ctx, storage, embedder, vector_index).await,
         "memory.search" => memory_search_method(params, ctx, storage, embedder, vector_index).await,
         "memory.get" => memory_get(params, ctx, storage).await,
+        "memory.update" => memory_update_method(params, ctx, storage, embedder, vector_index).await,
+        "memory.delete" => memory_delete_method(params, ctx, storage, vector_index).await,
         _ => Err(DispatchError::MethodNotFound),
     }
 }
@@ -589,6 +601,11 @@ struct MemoryCreateParams {
     /// absent (matches engine default).
     #[serde(default)]
     scope: Option<MemoryScope>,
+    /// Phase G D-G1 (v0.4) wire-up: optional provenance metadata. All
+    /// fields inside are optional — hosts populate what they can
+    /// detect. Wire shape mirrors [`MemoryOrigin`] serde.
+    #[serde(default)]
+    origin: Option<MemoryOrigin>,
 }
 
 async fn memory_create(
@@ -609,7 +626,7 @@ async fn memory_create(
     let id = new_memory_id();
     let now = chrono::Utc::now();
     let scope = p.scope.unwrap_or_default();
-    let mem = memory_insert_scoped(
+    let mem = memory_insert_with_provenance(
         ctx,
         storage,
         embedder,
@@ -619,6 +636,7 @@ async fn memory_create(
         p.content,
         now,
         scope,
+        p.origin,
     )
     .await
     .map_err(|e| DispatchError::Other(anyhow!("memory.insert failed: {e}")))?;
@@ -627,6 +645,7 @@ async fn memory_create(
         "description": mem.frontmatter.description,
         "created_at": mem.frontmatter.created_at,
         "scope": mem.frontmatter.scope,
+        "origin": mem.frontmatter.origin,
     }))
 }
 
@@ -765,9 +784,114 @@ async fn memory_get(
             "content": mem.content,
             "created_at": mem.frontmatter.created_at,
             "scope": mem.frontmatter.scope,
+            "origin": mem.frontmatter.origin,
         })),
         Ok(None) => Err(DispatchError::NotFound(p.id)),
         Err(e) => Err(DispatchError::Other(anyhow!("memory.get failed: {e}"))),
+    }
+}
+
+#[derive(Deserialize)]
+struct MemoryUpdateParams {
+    id: String,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    content: Option<String>,
+    #[serde(default)]
+    scope: Option<MemoryScope>,
+}
+
+/// `memory.update` — mutate description, content, and/or scope on an
+/// existing memory. Identity (`id`, `created_at`, citation counter,
+/// `derived_from`, `origin`) is always preserved. Re-embeds on
+/// content change; description/scope-only edits skip the embed path.
+/// Returns the updated frontmatter shape (no body); call `memory.get`
+/// to re-read the new full content.
+async fn memory_update_method(
+    params: Value,
+    ctx: &Context,
+    storage: &dyn Storage,
+    embedder: &dyn Embedder,
+    vector_index: &dyn VectorIndex,
+) -> std::result::Result<Value, DispatchError> {
+    let p: MemoryUpdateParams = serde_json::from_value(params)
+        .map_err(|e| DispatchError::InvalidParams(e.to_string()))?;
+    if p.id.trim().is_empty() {
+        return Err(DispatchError::InvalidParams("id required".into()));
+    }
+    if p.description.is_none() && p.content.is_none() && p.scope.is_none() {
+        return Err(DispatchError::InvalidParams(
+            "at least one of description, content, scope must be supplied".into(),
+        ));
+    }
+    let now = chrono::Utc::now();
+    let mem_id = MemoryId::new(p.id.clone());
+    match memory_update(
+        ctx,
+        storage,
+        embedder,
+        vector_index,
+        &mem_id,
+        p.description,
+        p.content,
+        p.scope,
+        now,
+    )
+    .await
+    {
+        Ok(Some(mem)) => Ok(json!({
+            "ok": true,
+            "id": mem.frontmatter.id.as_str(),
+            "description": mem.frontmatter.description,
+            "created_at": mem.frontmatter.created_at,
+            "updated_at": mem.frontmatter.updated_at,
+            "scope": mem.frontmatter.scope,
+            "origin": mem.frontmatter.origin,
+        })),
+        Ok(None) => Err(DispatchError::NotFound(p.id)),
+        Err(e) => Err(DispatchError::Other(anyhow!("memory.update failed: {e}"))),
+    }
+}
+
+#[derive(Deserialize)]
+struct MemoryDeleteParams {
+    id: String,
+    /// Bypass user-immunity. `false` (the default) returns a
+    /// structured `UserMemoryImmune` error if the memory is cited by
+    /// a user-authored lesson. `true` is the explicit "yes I really
+    /// mean it" override — the user-initiated `forget` path.
+    #[serde(default)]
+    force: bool,
+}
+
+/// `memory.delete` — the `forget` operation. Routes to
+/// [`crate::engine::memory::delete`] which already encodes the
+/// user-immunity invariant. `force = true` is the user-initiated
+/// override; `force = false` (default) is the safe engine-initiated
+/// path.
+async fn memory_delete_method(
+    params: Value,
+    ctx: &Context,
+    storage: &dyn Storage,
+    vector_index: &dyn VectorIndex,
+) -> std::result::Result<Value, DispatchError> {
+    let p: MemoryDeleteParams = serde_json::from_value(params)
+        .map_err(|e| DispatchError::InvalidParams(e.to_string()))?;
+    if p.id.trim().is_empty() {
+        return Err(DispatchError::InvalidParams("id required".into()));
+    }
+    let mem_id = MemoryId::new(p.id.clone());
+    match memory_delete(ctx, storage, vector_index, &mem_id, p.force).await {
+        Ok(()) => Ok(json!({
+            "ok": true,
+            "id": p.id,
+            "forced": p.force,
+        })),
+        Err(EngineError::UserMemoryImmune { id, cited_by }) => {
+            Err(DispatchError::UserMemoryImmune { id, cited_by })
+        }
+        Err(e) => Err(DispatchError::Other(anyhow!("memory.delete failed: {e}"))),
     }
 }
 
@@ -870,6 +994,9 @@ mod tests {
                 Self::NotFound(s) => write!(f, "NotFound({s})"),
                 Self::PromotionBlocked(rs) => write!(f, "PromotionBlocked({rs:?})"),
                 Self::UserLessonImmune(s) => write!(f, "UserLessonImmune({s})"),
+                Self::UserMemoryImmune { id, cited_by } => {
+                    write!(f, "UserMemoryImmune({id}, cited_by={cited_by})")
+                }
                 Self::Other(e) => write!(f, "Other({e:#})"),
             }
         }

@@ -155,7 +155,10 @@ pub async fn insert(
 
 /// Insert a memory with an explicit [`MemoryScope`]. Phase F D-F8 +
 /// audit-fix close: the write half of the scope-aware manifest filter.
-/// `insert` delegates to this with `MemoryScope::User`.
+/// `insert` delegates to this with `MemoryScope::User`. v0.4 callers
+/// that want to record provenance metadata should use
+/// [`insert_with_provenance`] instead — `insert_scoped` itself stays
+/// origin-less to preserve its v0.3.1 call-site surface.
 #[allow(clippy::too_many_arguments)]
 pub async fn insert_scoped(
     ctx: &Context,
@@ -168,6 +171,43 @@ pub async fn insert_scoped(
     now: DateTime<Utc>,
     scope: crate::engine::memory::MemoryScope,
 ) -> Result<Memory, EngineError> {
+    insert_with_provenance(
+        ctx,
+        storage,
+        embedder,
+        vector_index,
+        id,
+        description,
+        content,
+        now,
+        scope,
+        None,
+    )
+    .await
+}
+
+/// Insert a memory with explicit [`MemoryScope`] AND optional
+/// [`MemoryOrigin`] provenance. Phase G D-G1 (v0.4) — the deepest
+/// write-path for `memory.create` callers that have rich host-side
+/// context to attach.
+///
+/// `origin = None` (or an empty origin) is equivalent to
+/// [`insert_scoped`] — the on-disk YAML omits the `origin:` block,
+/// so v0.4-shipping callers don't bloat files when their host can't
+/// detect anything useful.
+#[allow(clippy::too_many_arguments)]
+pub async fn insert_with_provenance(
+    ctx: &Context,
+    storage: &dyn Storage,
+    embedder: &dyn Embedder,
+    vector_index: &dyn VectorIndex,
+    id: MemoryId,
+    description: impl Into<String>,
+    content: impl Into<String>,
+    now: DateTime<Utc>,
+    scope: crate::engine::memory::MemoryScope,
+    origin: Option<crate::engine::memory::MemoryOrigin>,
+) -> Result<Memory, EngineError> {
     let description = description.into();
     let content = content.into();
     // 1. Embed.
@@ -176,8 +216,13 @@ pub async fn insert_scoped(
     let embedding = embeddings
         .pop()
         .ok_or_else(|| EngineError::Parse("embedder returned zero vectors".into()))?;
-    // 2. Build frontmatter (with scope) + persist the .md file.
-    let fm = MemoryFrontmatter::new(id.clone(), description, now).with_scope(scope);
+    // 2. Build frontmatter (with scope + optional origin) + persist
+    //    the .md file. `with_origin` short-circuits to `None` on an
+    //    empty origin, so absent fields don't bloat YAML.
+    let mut fm = MemoryFrontmatter::new(id.clone(), description, now).with_scope(scope);
+    if let Some(o) = origin {
+        fm = fm.with_origin(o);
+    }
     let yaml = render_memory_yaml(&fm, &content)?;
     let md_key = StorageKey::memory(ctx, id.as_str());
     storage.put(&md_key, Bytes::from(yaml)).await?;
@@ -232,6 +277,105 @@ pub async fn get_by_id_with_embedding(
     let embedding = bytes_to_embedding(&vec_bytes, expected_dims)?;
     mem.embedding = Some(embedding);
     Ok(Some(mem))
+}
+
+/// Update an existing memory in place. Phase G D-G2 (v0.4): the
+/// edit half of the memory lifecycle (`forget` is the delete half).
+///
+/// Fields are `Option<_>`: passing `None` preserves the existing
+/// value, `Some` mutates. Identity (`id`, `created_at`, `derived_from`,
+/// `consumed_by_user_lessons`, `origin`) is ALWAYS preserved — only
+/// description, content, and scope are mutable. `updated_at` is set
+/// to `now` if any field changed.
+///
+/// When `content` is `Some(new_text)` AND differs from the existing
+/// body, the memory is re-embedded and the vector index entry is
+/// replaced (delete + insert). Description-only or scope-only edits
+/// skip the embed path and leave the `.vec` sidecar untouched (the
+/// cheap path).
+///
+/// Returns `Ok(None)` if no memory with that id exists. The user-
+/// immunity invariant is NOT triggered here — updates don't break
+/// citation chains. `forget` is where immunity matters.
+#[allow(clippy::too_many_arguments)]
+pub async fn update(
+    ctx: &Context,
+    storage: &dyn Storage,
+    embedder: &dyn Embedder,
+    vector_index: &dyn VectorIndex,
+    id: &MemoryId,
+    description: Option<String>,
+    content: Option<String>,
+    scope: Option<crate::engine::memory::MemoryScope>,
+    now: DateTime<Utc>,
+) -> Result<Option<Memory>, EngineError> {
+    let Some(existing) = get_by_id(ctx, storage, id).await? else {
+        return Ok(None);
+    };
+    let mut fm = existing.frontmatter.clone();
+    let mut changed = false;
+    if let Some(d) = description {
+        if d != fm.description {
+            fm.description = d;
+            changed = true;
+        }
+    }
+    if let Some(s) = scope {
+        if s != fm.scope {
+            fm.scope = s;
+            changed = true;
+        }
+    }
+    let content_changed = match &content {
+        Some(c) => *c != existing.content,
+        None => false,
+    };
+    if content_changed {
+        changed = true;
+    }
+    if !changed {
+        // Nothing to do — return the existing memory untouched.
+        return Ok(Some(existing));
+    }
+    fm.updated_at = Some(now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
+
+    let body = content.unwrap_or_else(|| existing.content.clone());
+
+    // Re-embed only when content actually changed; description /
+    // scope edits don't touch the embedding.
+    let embedding_to_persist = if content_changed {
+        let mut embeddings = embedder.embed(ctx, std::slice::from_ref(&body)).await?;
+        let v = embeddings
+            .pop()
+            .ok_or_else(|| EngineError::Parse("embedder returned zero vectors on update".into()))?;
+        Some(v)
+    } else {
+        None
+    };
+
+    // Persist the new .md atomically (LocalFsStorage::put writes via
+    // temp + rename internally).
+    let yaml = render_memory_yaml(&fm, &body)?;
+    let md_key = StorageKey::memory(ctx, id.as_str());
+    storage.put(&md_key, Bytes::from(yaml)).await?;
+
+    if let Some(embedding) = embedding_to_persist.as_ref() {
+        // Replace the .vec sidecar.
+        let vec_bytes = embedding_to_bytes(embedding);
+        storage
+            .put(&vec_key(ctx, id), Bytes::from(vec_bytes))
+            .await?;
+        // Swap the vector index entry — delete (tombstones the prior
+        // point) then insert the new one under the same id.
+        vector_index.delete(ctx, id).await?;
+        vector_index.insert(ctx, id, embedding).await?;
+    }
+
+    Ok(Some(
+        Memory::new(fm, body).with_embedding(
+            embedding_to_persist.unwrap_or_else(|| existing.embedding.unwrap_or_default()),
+        ),
+    ))
 }
 
 /// Statistics returned by [`rehydrate_vector_index`].

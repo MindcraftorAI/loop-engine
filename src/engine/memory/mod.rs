@@ -29,8 +29,10 @@ pub mod store;
 
 pub use compress::{compress, CompressionConfig, CompressionWindow};
 pub use id::MemoryId;
+pub use origin::MemoryOrigin;
 pub use scope::{MemoryScope, MemoryScopeFilter};
 
+pub mod origin;
 pub mod scope;
 // Phase E2 audit B-M2 extraction: chase + recompute live in
 // `lifecycle.rs`. Re-exported here so existing call sites continue
@@ -43,7 +45,7 @@ pub use lifecycle::{
 pub(crate) use store::decrement_citation_count;
 pub use store::{
     delete, get_by_id, get_by_id_with_embedding, increment_citation_count, insert, insert_scoped,
-    prune, rehydrate_vector_index, search, RehydrateStats,
+    insert_with_provenance, prune, rehydrate_vector_index, search, update, RehydrateStats,
 };
 
 /// YAML frontmatter for a memory file on disk. Mirrors
@@ -82,6 +84,14 @@ pub struct MemoryFrontmatter {
     /// stay immune regardless of scope).
     #[serde(default)]
     pub scope: MemoryScope,
+    /// Phase G D-G1 (v0.4): provenance metadata — host, session_id,
+    /// model, cwd_basename, written_at. `None` for v0.3.1-era memories
+    /// (the field is missing from the YAML); future cycles can promote
+    /// the field to required if all live data has it. The wedge gate's
+    /// `origin_diverse` signal (v0.4+) reads `session_id` to count
+    /// cross-session reproducibility.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<MemoryOrigin>,
 }
 
 impl MemoryFrontmatter {
@@ -101,6 +111,7 @@ impl MemoryFrontmatter {
             consumed_by_user_lessons: 0,
             derived_from: Vec::new(),
             scope: MemoryScope::default(),
+            origin: None,
         }
     }
 
@@ -111,6 +122,16 @@ impl MemoryFrontmatter {
     #[must_use]
     pub fn with_scope(mut self, scope: MemoryScope) -> Self {
         self.scope = scope;
+        self
+    }
+
+    /// Builder: set the [`MemoryOrigin`]. Phase G D-G1 (v0.4): the
+    /// write half of provenance metadata. Skipped on `None` /
+    /// `is_empty()` so v0.3.1 callers and hosts that detect no
+    /// provenance round-trip clean.
+    #[must_use]
+    pub fn with_origin(mut self, origin: MemoryOrigin) -> Self {
+        self.origin = if origin.is_empty() { None } else { Some(origin) };
         self
     }
 }
