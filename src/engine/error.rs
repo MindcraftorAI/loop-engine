@@ -139,6 +139,20 @@ pub enum EngineError {
     #[error("compression scope mismatch: predecessors span multiple scopes: {window:?}")]
     CompressionScopeMismatch { window: Vec<String> },
 
+    /// Phase G D-G8: engine-initiated discard/supersede refused
+    /// because the lesson is user-authored. User-initiated paths
+    /// pass `force = true` to bypass.
+    #[error("user-lesson immune: lesson {id} is user-authored — use force=true to bypass")]
+    UserLessonImmune { id: String },
+
+    /// Phase G D-G7: `supersede_lesson` rejected for a structural
+    /// reason. See [`crate::engine::lessons::transitions::SupersedeBlockReason`].
+    #[error("lesson supersede invalid: {id}: {reason}")]
+    LessonSupersedeInvalid {
+        id: String,
+        reason: crate::engine::lessons::transitions::SupersedeBlockReason,
+    },
+
     /// `narrative::generate` rejected the LLM output as too thin to
     /// ground (the model returned a refusal indicating the inputs
     /// don't justify any concrete causal narrative). Distinct from

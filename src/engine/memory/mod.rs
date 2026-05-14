@@ -40,6 +40,7 @@ pub use lifecycle::{
 };
 // `decrement_citation_count` is `pub(crate)` — Phase G consumes from
 // within the engine; not part of the external API.
+pub(crate) use store::decrement_citation_count;
 pub use store::{
     delete, get_by_id, get_by_id_with_embedding, increment_citation_count, insert, insert_scoped,
     prune, search,

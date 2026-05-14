@@ -71,6 +71,15 @@ impl StorageKey {
         Self(prefixed(ctx, &suffix))
     }
 
+    /// Skill lesson-history audit sidecar (Phase G D-G6). Append-
+    /// only YAML lines logging which lessons promoted into this
+    /// skill, when, and by whom. Engine never edits past entries.
+    /// `skills/<id>/lesson-history.yaml`.
+    pub fn skill_history(ctx: &Context, id: &str) -> Self {
+        let suffix = format!("skills/{id}/lesson-history.yaml");
+        Self(prefixed(ctx, &suffix))
+    }
+
     /// Prefix key for listing all skills.
     pub fn skills_prefix(ctx: &Context) -> Self {
         Self(prefixed(ctx, "skills"))

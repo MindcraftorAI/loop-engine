@@ -42,8 +42,10 @@ pub use events::{EngineEvent, EventSource, EventSourceError, HostVersion, Projec
 // of the prelude-level `ActiveLesson`), so the gate types belong in the
 // prelude alongside it.
 pub use lessons::{
-    check_promotion_gate, generate_narrative, BlockReason, GateDecision, NarrativeConfig,
-    NarrativeContext, PassReason, PromotionConfig,
+    capture_feedback as capture_lesson_feedback, check_promotion_gate, discard as discard_lesson,
+    generate_narrative, promote as promote_lesson, supersede as supersede_lesson, BlockReason,
+    FeedbackPolarity, GateDecision, NarrativeConfig, NarrativeContext, PassReason,
+    PromotionConfig, SupersedeBlockReason,
 };
 // `MockLlmClient` + `MockEmbedder` are NOT re-exported here — they
 // live behind `#[cfg(any(test, feature = "test-fixtures"))]` and are
