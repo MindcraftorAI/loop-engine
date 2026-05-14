@@ -42,7 +42,9 @@ use crate::engine::yaml::{combine_frontmatter, split_frontmatter_normalized};
 const CITATION_CAS_MAX_RETRIES: u32 = 5;
 
 /// `.vec` sidecar file holding the raw little-endian f32 embedding.
-fn vec_key(ctx: &Context, id: &MemoryId) -> StorageKey {
+/// `pub(crate)` so the compression module (Phase E2) can build keys
+/// using the same convention.
+pub(crate) fn vec_key(ctx: &Context, id: &MemoryId) -> StorageKey {
     let suffix = format!("memories/{}.vec", id.as_str());
     if ctx.tenant_id.as_str() == "local" {
         StorageKey::from_raw(suffix)
@@ -55,16 +57,22 @@ fn vec_key(ctx: &Context, id: &MemoryId) -> StorageKey {
 }
 
 /// Encode a Memory (frontmatter + body) into the on-disk YAML+body
-/// shape used for the `memories/<id>.md` file.
-fn render_memory_yaml(fm: &MemoryFrontmatter, content: &str) -> Result<String, EngineError> {
+/// shape used for the `memories/<id>.md` file. `pub(crate)` for the
+/// compression module (Phase E2).
+pub(crate) fn render_memory_yaml(
+    fm: &MemoryFrontmatter,
+    content: &str,
+) -> Result<String, EngineError> {
     let yaml = serde_yml::to_string(fm)
         .map_err(|e| EngineError::Yaml(Box::new(e)))?;
     Ok(combine_frontmatter(yaml.trim(), content))
 }
 
 /// Decode a `memories/<id>.md` file body into a `(MemoryFrontmatter,
-/// String)`.
-fn parse_memory_file(bytes: &[u8]) -> Result<(MemoryFrontmatter, String), EngineError> {
+/// String)`. `pub(crate)` for the compression module.
+pub(crate) fn parse_memory_file(
+    bytes: &[u8],
+) -> Result<(MemoryFrontmatter, String), EngineError> {
     let content = std::str::from_utf8(bytes)
         .map_err(|e| EngineError::Parse(format!("non-utf8 memory bytes: {e}")))?;
     let split = split_frontmatter_normalized(content)
@@ -75,7 +83,8 @@ fn parse_memory_file(bytes: &[u8]) -> Result<(MemoryFrontmatter, String), Engine
 }
 
 /// Convert `Vec<f32>` to little-endian bytes for the `.vec` sidecar.
-fn embedding_to_bytes(vec: &[f32]) -> Vec<u8> {
+/// `pub(crate)` for the compression module.
+pub(crate) fn embedding_to_bytes(vec: &[f32]) -> Vec<u8> {
     let mut buf = Vec::with_capacity(vec.len() * 4);
     for v in vec {
         buf.extend_from_slice(&v.to_le_bytes());

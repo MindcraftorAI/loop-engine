@@ -87,6 +87,35 @@ pub enum EngineError {
     )]
     UserMemoryImmune { id: String, cited_by: u32 },
 
+    /// Phase E2 compression: LLM returned the refusal sentinel
+    /// `{"error": "insufficient_input"}` — the input window was too
+    /// thin to compose a meaningful summary. Distinct from
+    /// `Llm(LlmError::ValidationFailed)` (which is a defect) — this
+    /// is a graceful no-op signal.
+    #[error("compression refused: insufficient input quality to compose a summary")]
+    CompressionInsufficientInput,
+
+    /// Phase E2 compression: cycle or depth-exceeded in the
+    /// `derived_from` chain. Includes the chain that triggered the
+    /// detection (last 16 ids visited) for debugging.
+    #[error("compression cycle or depth exceeded: chain {chain:?}")]
+    CompressionCycle { chain: Vec<String> },
+
+    /// Phase E2: delete refused because the memory is referenced as
+    /// a predecessor in some compressed memory's `derived_from` AND
+    /// that compressed memory has been deleted, leaving the citation
+    /// chain in a state where deleting this id would orphan a
+    /// user-authored lesson's evidence. Rare audit-trail integrity
+    /// case; surfaces during recompute drift checks too.
+    #[error(
+        "delete would orphan citation chain: memory {id} is a derived_from predecessor in \
+         chain(s) with missing successor(s): {in_chain_with:?}"
+    )]
+    CompressionWouldOrphanCitation {
+        id: String,
+        in_chain_with: Vec<String>,
+    },
+
     /// `narrative::generate` rejected the LLM output as too thin to
     /// ground (the model returned a refusal indicating the inputs
     /// don't justify any concrete causal narrative). Distinct from

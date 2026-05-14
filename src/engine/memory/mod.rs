@@ -21,9 +21,12 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+pub mod compress;
+pub(crate) mod cycle;
 pub mod id;
 pub mod store;
 
+pub use compress::{compress, CompressionConfig, CompressionWindow};
 pub use id::MemoryId;
 // `decrement_citation_count` is `pub(crate)` — Phase G consumes from
 // within the engine; not part of the external API.
@@ -112,6 +115,13 @@ impl Memory {
     pub fn with_embedding(mut self, embedding: Vec<f32>) -> Self {
         self.embedding = Some(embedding);
         self
+    }
+
+    /// Phase E2 D-Cx5: `true` if this memory was produced by
+    /// compression (i.e., `derived_from` is non-empty). `false` for
+    /// raw memories.
+    pub fn is_compressed(&self) -> bool {
+        !self.frontmatter.derived_from.is_empty()
     }
 }
 

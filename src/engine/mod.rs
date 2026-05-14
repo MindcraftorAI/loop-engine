@@ -56,13 +56,13 @@ pub use manifest::{assemble, ActiveLesson, AssembleConfig, AssemblyStats, Manife
 // collision with future `lessons::insert` / future top-level helpers
 // (Phase D `generate_narrative` precedent).
 pub use memory::{
-    delete as delete_memory, get_by_id as get_memory_by_id,
+    compress as compress_memories, delete as delete_memory, get_by_id as get_memory_by_id,
     get_by_id_with_embedding as get_memory_by_id_with_embedding,
     increment_citation_count as increment_memory_citation_count,
     insert as insert_memory, prune as prune_memories,
     recompute_citation_counts as recompute_memory_citation_counts,
-    search as search_memories, Memory, MemoryFrontmatter, MemoryId, MemoryQuery, MemoryRef,
-    PrunePredicate, PruneStats, RecomputeStats,
+    search as search_memories, CompressionConfig, CompressionWindow, Memory, MemoryFrontmatter,
+    MemoryId, MemoryQuery, MemoryRef, PrunePredicate, PruneStats, RecomputeStats,
 };
 pub use storage::{
     LocalFsStorage, MemoryStorage, Storage, StorageError, StorageKey, StorageMetadata, Version,
