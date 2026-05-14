@@ -12,8 +12,7 @@ use chrono::Utc;
 use crate::engine::sentiment::attribution::attribute_signal;
 use crate::engine::sentiment::signals::{AbstainReason, SentimentSignal};
 use crate::engine::sentiment::types::{
-    CalibratedConfidence, ClassificationRequest, Hazard, LoadedItemId, Polarity,
-    RawClassification,
+    CalibratedConfidence, ClassificationRequest, Hazard, LoadedItemId, Polarity, RawClassification,
 };
 
 use super::config::OrchestratorConfig;
@@ -57,7 +56,10 @@ pub(super) fn derive_signals(
 
     if raw.is_abstain() {
         abstentions.push((None, AbstainReason::ClassifierAbstained));
-        return DeriveOutcome { signals, abstentions };
+        return DeriveOutcome {
+            signals,
+            abstentions,
+        };
     }
 
     for item in &raw.per_item {
@@ -87,7 +89,12 @@ pub(super) fn derive_signals(
         }
 
         let mut auto_abstain: Option<Hazard> = None;
-        for h in item.hazards.iter().chain(raw.global_hazards.iter()).copied() {
+        for h in item
+            .hazards
+            .iter()
+            .chain(raw.global_hazards.iter())
+            .copied()
+        {
             if is_auto_abstain_hazard(h) {
                 auto_abstain = Some(h);
                 break;
@@ -138,7 +145,10 @@ pub(super) fn derive_signals(
         });
     }
 
-    DeriveOutcome { signals, abstentions }
+    DeriveOutcome {
+        signals,
+        abstentions,
+    }
 }
 
 #[cfg(test)]
@@ -324,7 +334,10 @@ mod tests {
         let req = empty_request_with_text("thanks", vec![it]);
         let mut rate = HashMap::new();
         let now = Instant::now();
-        rate.insert(LoadedItemId::new("a"), now - std::time::Duration::from_secs(1));
+        rate.insert(
+            LoadedItemId::new("a"),
+            now - std::time::Duration::from_secs(1),
+        );
         let out = derive_signals(
             &raw,
             &req,
@@ -348,7 +361,10 @@ mod tests {
         let req = empty_request_with_text("thanks", vec![it]);
         let mut rate = HashMap::new();
         let now = Instant::now();
-        rate.insert(LoadedItemId::new("a"), now - std::time::Duration::from_secs(120));
+        rate.insert(
+            LoadedItemId::new("a"),
+            now - std::time::Duration::from_secs(120),
+        );
         let out = derive_signals(
             &raw,
             &req,

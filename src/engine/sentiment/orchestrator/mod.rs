@@ -132,11 +132,7 @@ impl Orchestrator {
     }
 
     /// Process one engine event. Dispatches by variant.
-    pub async fn process_event(
-        &self,
-        ctx: &Context,
-        event: &EngineEvent,
-    ) -> OrchestratorOutput {
+    pub async fn process_event(&self, ctx: &Context, event: &EngineEvent) -> OrchestratorOutput {
         match event {
             EngineEvent::UserTurn { .. } => self.handle_user_turn(ctx, event).await,
             EngineEvent::UserInterrupt { .. } => self.handle_user_interrupt(ctx, event).await,
@@ -148,11 +144,7 @@ impl Orchestrator {
         }
     }
 
-    async fn handle_user_turn(
-        &self,
-        ctx: &Context,
-        event: &EngineEvent,
-    ) -> OrchestratorOutput {
+    async fn handle_user_turn(&self, ctx: &Context, event: &EngineEvent) -> OrchestratorOutput {
         let EngineEvent::UserTurn {
             event_uuid,
             text,
@@ -194,7 +186,11 @@ impl Orchestrator {
 
         // === Critical section 1: append turn, snapshot manifest + request ===
         let request = {
-            let entry = self.inner.sessions.entry(ctx.session_id.clone()).or_default();
+            let entry = self
+                .inner
+                .sessions
+                .entry(ctx.session_id.clone())
+                .or_default();
             let mut state = entry.lock().expect("session state mutex poisoned");
             push_turn(
                 &mut state,
@@ -234,9 +230,7 @@ impl Orchestrator {
         };
 
         // === Critical section 2: derive signals (RACE-SAFE per audit C1) ===
-        let (signals, abstentions) = if let Some(entry) =
-            self.inner.sessions.get(&ctx.session_id)
-        {
+        let (signals, abstentions) = if let Some(entry) = self.inner.sessions.get(&ctx.session_id) {
             let mut state = entry.lock().expect("session state mutex poisoned");
             let now = Instant::now();
             let outcome = derive_signals(
@@ -270,7 +264,10 @@ impl Orchestrator {
             }
         }
 
-        OrchestratorOutput { signals, abstentions }
+        OrchestratorOutput {
+            signals,
+            abstentions,
+        }
     }
 
     async fn handle_user_interrupt(
@@ -283,7 +280,11 @@ impl Orchestrator {
         };
 
         let (signals, abstentions) = {
-            let entry = self.inner.sessions.entry(ctx.session_id.clone()).or_default();
+            let entry = self
+                .inner
+                .sessions
+                .entry(ctx.session_id.clone())
+                .or_default();
             let mut state = entry.lock().expect("session state mutex poisoned");
             let now = Instant::now();
             let cooldown = self.inner.config.per_lesson_cooldown;
@@ -350,7 +351,10 @@ impl Orchestrator {
             }
         }
 
-        OrchestratorOutput { signals, abstentions }
+        OrchestratorOutput {
+            signals,
+            abstentions,
+        }
     }
 
     fn reset_phase_idle(&self, session_id: &SessionId) {
@@ -459,9 +463,8 @@ mod tests {
     async fn emits_signal_when_manifest_classifier_and_attribution_all_agree() {
         let (orch, classifier_arc, writer) = {
             // Build a classifier with a canned positive hit on "les-quokka-special".
-            let classifier = MockSentimentClassifier::default().with_response(
-                positive_classification("les-quokka-special", 0.92),
-            );
+            let classifier = MockSentimentClassifier::default()
+                .with_response(positive_classification("les-quokka-special", 0.92));
             let classifier = Arc::new(classifier);
             let writer = Arc::new(MockSignalWriter::default());
             let orch = Orchestrator::new(
@@ -604,10 +607,7 @@ mod tests {
 
     // ---- Day 17 D4: HostVersion tripwire ----
 
-    fn user_turn_event_with_host_version(
-        session_id: &SessionId,
-        version: &str,
-    ) -> EngineEvent {
+    fn user_turn_event_with_host_version(session_id: &SessionId, version: &str) -> EngineEvent {
         EngineEvent::UserTurn {
             session_id: session_id.clone(),
             event_uuid: "evt-tripwire".into(),
@@ -628,9 +628,15 @@ mod tests {
         let (orch, classifier_arc, _) = orchestrator_with_mocks();
         let ctx = Context::single_user_local();
         let out = orch
-            .process_event(&ctx, &user_turn_event_with_host_version(&ctx.session_id, "0.0.0"))
+            .process_event(
+                &ctx,
+                &user_turn_event_with_host_version(&ctx.session_id, "0.0.0"),
+            )
             .await;
-        assert!(out.abstentions.iter().all(|(_, r)| !matches!(r, AbstainReason::UntestedHostVersion)));
+        assert!(out
+            .abstentions
+            .iter()
+            .all(|(_, r)| !matches!(r, AbstainReason::UntestedHostVersion)));
         assert_eq!(
             classifier_arc.call_count(),
             1,
@@ -640,8 +646,7 @@ mod tests {
 
     #[tokio::test]
     async fn tripwire_warn_action_does_not_abstain() {
-        let classifier: Arc<dyn SentimentClassifier> =
-            Arc::new(MockSentimentClassifier::default());
+        let classifier: Arc<dyn SentimentClassifier> = Arc::new(MockSentimentClassifier::default());
         let writer: Arc<dyn SignalWriter> = Arc::new(MockSignalWriter::default());
         let config = OrchestratorConfig {
             host_version_policy: HostVersionPolicy {
@@ -654,7 +659,10 @@ mod tests {
         let ctx = Context::single_user_local();
         // "1.0.0" is below the tested range — Warn action means we still process.
         let out = orch
-            .process_event(&ctx, &user_turn_event_with_host_version(&ctx.session_id, "1.0.0"))
+            .process_event(
+                &ctx,
+                &user_turn_event_with_host_version(&ctx.session_id, "1.0.0"),
+            )
             .await;
         assert!(
             out.abstentions
@@ -666,8 +674,7 @@ mod tests {
 
     #[tokio::test]
     async fn tripwire_abstain_action_skips_turn_for_out_of_range_version() {
-        let classifier: Arc<dyn SentimentClassifier> =
-            Arc::new(MockSentimentClassifier::default());
+        let classifier: Arc<dyn SentimentClassifier> = Arc::new(MockSentimentClassifier::default());
         let writer: Arc<dyn SignalWriter> = Arc::new(MockSignalWriter::default());
         let config = OrchestratorConfig {
             host_version_policy: HostVersionPolicy {
@@ -679,17 +686,22 @@ mod tests {
         let orch = Orchestrator::new(classifier, writer, config);
         let ctx = Context::single_user_local();
         let out = orch
-            .process_event(&ctx, &user_turn_event_with_host_version(&ctx.session_id, "9.9.9"))
+            .process_event(
+                &ctx,
+                &user_turn_event_with_host_version(&ctx.session_id, "9.9.9"),
+            )
             .await;
         assert!(out.signals.is_empty());
         assert_eq!(out.abstentions.len(), 1);
-        assert!(matches!(out.abstentions[0].1, AbstainReason::UntestedHostVersion));
+        assert!(matches!(
+            out.abstentions[0].1,
+            AbstainReason::UntestedHostVersion
+        ));
     }
 
     #[tokio::test]
     async fn tripwire_abstain_action_passes_through_in_range_version() {
-        let classifier: Arc<dyn SentimentClassifier> =
-            Arc::new(MockSentimentClassifier::default());
+        let classifier: Arc<dyn SentimentClassifier> = Arc::new(MockSentimentClassifier::default());
         let writer: Arc<dyn SignalWriter> = Arc::new(MockSignalWriter::default());
         let config = OrchestratorConfig {
             host_version_policy: HostVersionPolicy {
@@ -701,7 +713,10 @@ mod tests {
         let orch = Orchestrator::new(classifier, writer, config);
         let ctx = Context::single_user_local();
         let out = orch
-            .process_event(&ctx, &user_turn_event_with_host_version(&ctx.session_id, "2.1.139"))
+            .process_event(
+                &ctx,
+                &user_turn_event_with_host_version(&ctx.session_id, "2.1.139"),
+            )
             .await;
         // No UntestedHostVersion abstain — mock classifier's empty-queue
         // ClassifierAbstained is the only abstention here.

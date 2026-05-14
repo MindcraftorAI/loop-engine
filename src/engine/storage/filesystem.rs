@@ -164,7 +164,9 @@ impl Storage for LocalFsStorage {
 /// Sync impl for Storage::metadata. Returns Ok(None) on missing.
 /// Birthtime is best-effort: only emitted when the platform + FS
 /// actually report it.
-fn metadata_sync(path: &Path) -> Result<Option<crate::engine::storage::StorageMetadata>, StorageError> {
+fn metadata_sync(
+    path: &Path,
+) -> Result<Option<crate::engine::storage::StorageMetadata>, StorageError> {
     use crate::engine::storage::StorageMetadata;
     use chrono::DateTime;
     use std::time::UNIX_EPOCH;
@@ -179,14 +181,14 @@ fn metadata_sync(path: &Path) -> Result<Option<crate::engine::storage::StorageMe
     // + Linux statx (kernel ≥4.11) + Windows. Older Linux returns Err;
     // we treat that as "no birthtime" rather than as a hard error.
     let birthtime = meta.created().ok().and_then(|sys| {
-        sys.duration_since(UNIX_EPOCH)
-            .ok()
-            .and_then(|d| DateTime::<chrono::Utc>::from_timestamp(d.as_secs() as i64, d.subsec_nanos()))
+        sys.duration_since(UNIX_EPOCH).ok().and_then(|d| {
+            DateTime::<chrono::Utc>::from_timestamp(d.as_secs() as i64, d.subsec_nanos())
+        })
     });
     let mtime = meta.modified().ok().and_then(|sys| {
-        sys.duration_since(UNIX_EPOCH)
-            .ok()
-            .and_then(|d| DateTime::<chrono::Utc>::from_timestamp(d.as_secs() as i64, d.subsec_nanos()))
+        sys.duration_since(UNIX_EPOCH).ok().and_then(|d| {
+            DateTime::<chrono::Utc>::from_timestamp(d.as_secs() as i64, d.subsec_nanos())
+        })
     });
     Ok(Some(StorageMetadata {
         birthtime,
@@ -400,13 +402,12 @@ mod tests {
         let ctx = Context::single_user_local();
 
         // Three lessons under two status dirs (sub-directories).
-        for (status, id) in [
-            ("active", "a"),
-            ("active", "b"),
-            ("archived", "c"),
-        ] {
+        for (status, id) in [("active", "a"), ("active", "b"), ("archived", "c")] {
             storage
-                .put(&StorageKey::lesson(&ctx, status, id), Bytes::from_static(b"x"))
+                .put(
+                    &StorageKey::lesson(&ctx, status, id),
+                    Bytes::from_static(b"x"),
+                )
                 .await
                 .unwrap();
         }
@@ -441,13 +442,12 @@ mod tests {
         let mem_storage = super::super::MemoryStorage::default();
         let ctx = Context::single_user_local();
 
-        for (status, id) in [
-            ("active", "a"),
-            ("active", "b"),
-            ("archived", "c"),
-        ] {
+        for (status, id) in [("active", "a"), ("active", "b"), ("archived", "c")] {
             let key = StorageKey::lesson(&ctx, status, id);
-            fs_storage.put(&key, Bytes::from_static(b"x")).await.unwrap();
+            fs_storage
+                .put(&key, Bytes::from_static(b"x"))
+                .await
+                .unwrap();
             mem_storage
                 .put(&key, Bytes::from_static(b"x"))
                 .await
@@ -548,7 +548,10 @@ mod tests {
         let ctx = Context::single_user_local();
         let key = StorageKey::lesson(&ctx, "active", "les-v");
 
-        storage.put(&key, Bytes::from_static(b"short")).await.unwrap();
+        storage
+            .put(&key, Bytes::from_static(b"short"))
+            .await
+            .unwrap();
         let (_, v1) = storage.get_with_version(&key).await.unwrap().unwrap();
         storage
             .put(&key, Bytes::from_static(b"a longer body now"))
@@ -564,7 +567,10 @@ mod tests {
         let storage = LocalFsStorage::new(dir.path());
         let ctx = Context::single_user_local();
         let key = StorageKey::lesson(&ctx, "active", "les-conflict");
-        storage.put(&key, Bytes::from_static(b"existing")).await.unwrap();
+        storage
+            .put(&key, Bytes::from_static(b"existing"))
+            .await
+            .unwrap();
         // Caller mistakenly thinks the file doesn't exist.
         let ok = storage
             .put_if_version(&key, Bytes::from_static(b"new"), None)

@@ -109,16 +109,15 @@ pub async fn get_by_id(
         let Some(bytes) = storage.get(&key).await? else {
             continue;
         };
-        let content = std::str::from_utf8(&bytes).map_err(|e| {
-            EngineError::Parse(format!("non-utf8 lesson bytes for {key}: {e}"))
-        })?;
+        let content = std::str::from_utf8(&bytes)
+            .map_err(|e| EngineError::Parse(format!("non-utf8 lesson bytes for {key}: {e}")))?;
         let split = split_frontmatter_normalized(content)
             .map_err(|e| EngineError::Parse(format!("split frontmatter {key}: {e}")))?;
         // anyhow::Error doesn't impl std::error::Error directly, but it
         // does impl Into<Box<dyn Error + Send + Sync>> — use the variant
         // constructor directly rather than the EngineError::yaml() helper.
-        let frontmatter = parse_lesson_frontmatter(&split.yaml)
-            .map_err(|e| EngineError::Yaml(e.into()))?;
+        let frontmatter =
+            parse_lesson_frontmatter(&split.yaml).map_err(|e| EngineError::Yaml(e.into()))?;
         return Ok(Some(LoadedLesson {
             path: PathBuf::from(key.as_str()),
             status_dir: (*status).to_string(),
@@ -166,7 +165,9 @@ mod tests {
 
     use super::*;
     use crate::engine::paths::ENV_LOCK;
-    use crate::engine::yaml::{combine_frontmatter, writer::serialize_lesson_frontmatter, LessonStatus};
+    use crate::engine::yaml::{
+        combine_frontmatter, writer::serialize_lesson_frontmatter, LessonStatus,
+    };
     use tempfile::TempDir;
 
     fn with_temp_loop_home<F: FnOnce(&TempDir) -> Result<()>>(f: F) {
@@ -200,6 +201,7 @@ mod tests {
             thumbs_up_count: 0,
             thumbs_down_count: 0,
             external_signal_sources: vec![],
+            applied_session_ids: vec![],
             promotion_eligible_at: None,
             superseded_by: None,
             superseded_at: None,

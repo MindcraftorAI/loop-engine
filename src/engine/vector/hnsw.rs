@@ -170,9 +170,8 @@ impl HnswVectorIndex {
             Some(b) => b,
             None => return Ok(Self::new(dimensions)),
         };
-        let meta: HnswMeta = serde_json::from_slice(&meta_bytes).map_err(|e| {
-            VectorIndexError::Internal(format!("malformed hnsw meta: {e}"))
-        })?;
+        let meta: HnswMeta = serde_json::from_slice(&meta_bytes)
+            .map_err(|e| VectorIndexError::Internal(format!("malformed hnsw meta: {e}")))?;
         if meta.dimensions != dimensions {
             return Err(VectorIndexError::DimensionMismatch {
                 provided: dimensions,
@@ -184,18 +183,14 @@ impl HnswVectorIndex {
             .await
             .map_err(VectorIndexError::transport)?
             .ok_or_else(|| {
-                VectorIndexError::Internal(
-                    "hnsw_data missing despite meta present".to_string(),
-                )
+                VectorIndexError::Internal("hnsw_data missing despite meta present".to_string())
             })?;
         let graph_bytes = storage
             .get(&key_hnsw_graph())
             .await
             .map_err(VectorIndexError::transport)?
             .ok_or_else(|| {
-                VectorIndexError::Internal(
-                    "hnsw_graph missing despite meta present".to_string(),
-                )
+                VectorIndexError::Internal("hnsw_graph missing despite meta present".to_string())
             })?;
 
         // Bridge to hnsw_rs's file-based loader via a tempdir.
@@ -208,17 +203,14 @@ impl HnswVectorIndex {
         // the actual graph + point data lives inside the returned
         // Hnsw, so the leaked HnswIo carries minimal state.
         let hnsw = spawn_blocking(move || -> Result<_, VectorIndexError> {
-            let tmp = TempDir::new().map_err(|e| {
-                VectorIndexError::Internal(format!("tempdir create: {e}"))
-            })?;
+            let tmp = TempDir::new()
+                .map_err(|e| VectorIndexError::Internal(format!("tempdir create: {e}")))?;
             let data_path = tmp.path().join(format!("{DUMP_BASENAME}.hnsw.data"));
             let graph_path = tmp.path().join(format!("{DUMP_BASENAME}.hnsw.graph"));
-            fs::write(&data_path, &data_bytes).map_err(|e| {
-                VectorIndexError::Internal(format!("write data tempfile: {e}"))
-            })?;
-            fs::write(&graph_path, &graph_bytes).map_err(|e| {
-                VectorIndexError::Internal(format!("write graph tempfile: {e}"))
-            })?;
+            fs::write(&data_path, &data_bytes)
+                .map_err(|e| VectorIndexError::Internal(format!("write data tempfile: {e}")))?;
+            fs::write(&graph_path, &graph_bytes)
+                .map_err(|e| VectorIndexError::Internal(format!("write graph tempfile: {e}")))?;
             let reloader: &'static mut HnswIo =
                 Box::leak(Box::new(HnswIo::new(tmp.path(), DUMP_BASENAME)));
             let hnsw = reloader
@@ -238,15 +230,10 @@ impl HnswVectorIndex {
             .into_iter()
             .map(|(k, v)| (k, MemoryId::new(v)))
             .collect();
-        let rev_map: HashMap<MemoryId, usize> = id_map
-            .iter()
-            .map(|(k, v)| (v.clone(), *k))
-            .collect();
-        let tombstones: HashSet<MemoryId> = meta
-            .tombstones
-            .into_iter()
-            .map(MemoryId::new)
-            .collect();
+        let rev_map: HashMap<MemoryId, usize> =
+            id_map.iter().map(|(k, v)| (v.clone(), *k)).collect();
+        let tombstones: HashSet<MemoryId> =
+            meta.tombstones.into_iter().map(MemoryId::new).collect();
 
         Ok(Self {
             inner: RwLock::new(HnswInner {
@@ -353,11 +340,7 @@ impl VectorIndex for HnswVectorIndex {
         Ok(out)
     }
 
-    async fn delete(
-        &self,
-        _ctx: &Context,
-        id: &MemoryId,
-    ) -> Result<(), VectorIndexError> {
+    async fn delete(&self, _ctx: &Context, id: &MemoryId) -> Result<(), VectorIndexError> {
         let mut inner = self.inner.write();
         if inner.rev_map.contains_key(id) {
             inner.tombstones.insert(id.clone());
@@ -366,11 +349,7 @@ impl VectorIndex for HnswVectorIndex {
         Ok(())
     }
 
-    async fn persist(
-        &self,
-        _ctx: &Context,
-        storage: &dyn Storage,
-    ) -> Result<(), VectorIndexError> {
+    async fn persist(&self, _ctx: &Context, storage: &dyn Storage) -> Result<(), VectorIndexError> {
         // 1. Snapshot the meta state under the read lock; dump the
         //    HNSW to a tempdir (this is the slow op).
         let (meta_bytes, data_bytes, graph_bytes) = {
@@ -389,28 +368,24 @@ impl VectorIndex for HnswVectorIndex {
                     .map(|m| m.as_str().to_string())
                     .collect(),
             };
-            let meta_bytes = serde_json::to_vec(&meta).map_err(|e| {
-                VectorIndexError::Internal(format!("serialize meta: {e}"))
-            })?;
+            let meta_bytes = serde_json::to_vec(&meta)
+                .map_err(|e| VectorIndexError::Internal(format!("serialize meta: {e}")))?;
             // Dump HNSW to tempdir while holding the read lock — the
             // hnsw_rs `file_dump` is read-only on the index state.
             // We then read the bytes out and release the lock; the
             // Storage::put calls happen after.
-            let tmp = TempDir::new().map_err(|e| {
-                VectorIndexError::Internal(format!("tempdir create: {e}"))
-            })?;
+            let tmp = TempDir::new()
+                .map_err(|e| VectorIndexError::Internal(format!("tempdir create: {e}")))?;
             inner
                 .hnsw
                 .file_dump(tmp.path(), DUMP_BASENAME)
                 .map_err(|e| VectorIndexError::Internal(format!("hnsw dump: {e}")))?;
             let data_path = tmp.path().join(format!("{DUMP_BASENAME}.hnsw.data"));
             let graph_path = tmp.path().join(format!("{DUMP_BASENAME}.hnsw.graph"));
-            let data_bytes = fs::read(&data_path).map_err(|e| {
-                VectorIndexError::Internal(format!("read dump data: {e}"))
-            })?;
-            let graph_bytes = fs::read(&graph_path).map_err(|e| {
-                VectorIndexError::Internal(format!("read dump graph: {e}"))
-            })?;
+            let data_bytes = fs::read(&data_path)
+                .map_err(|e| VectorIndexError::Internal(format!("read dump data: {e}")))?;
+            let graph_bytes = fs::read(&graph_path)
+                .map_err(|e| VectorIndexError::Internal(format!("read dump graph: {e}")))?;
             (meta_bytes, data_bytes, graph_bytes)
         };
 
@@ -469,7 +444,11 @@ mod tests {
         let hits = idx.search(&ctx(), &unit_vec(4, 0), 2).await.unwrap();
         assert!(!hits.is_empty(), "expected at least one hit");
         assert_eq!(hits[0].id, a);
-        assert!(hits[0].similarity > 0.9, "self-match similarity: {}", hits[0].similarity);
+        assert!(
+            hits[0].similarity > 0.9,
+            "self-match similarity: {}",
+            hits[0].similarity
+        );
     }
 
     #[tokio::test]
@@ -478,7 +457,10 @@ mod tests {
         let id = MemoryId::new("mem-aaaaaaaa");
         let r = idx.insert(&ctx(), &id, &[1.0, 0.0]).await;
         match r {
-            Err(VectorIndexError::DimensionMismatch { provided: 2, expected: 4 }) => {}
+            Err(VectorIndexError::DimensionMismatch {
+                provided: 2,
+                expected: 4,
+            }) => {}
             other => panic!("expected DimensionMismatch, got {other:?}"),
         }
     }
@@ -541,7 +523,9 @@ mod tests {
         idx1.delete(&ctx(), &b).await.unwrap();
         idx1.persist(&ctx(), storage.as_ref()).await.unwrap();
 
-        let idx2 = HnswVectorIndex::load(&ctx(), storage.as_ref(), 4).await.unwrap();
+        let idx2 = HnswVectorIndex::load(&ctx(), storage.as_ref(), 4)
+            .await
+            .unwrap();
         // Tombstone state preserved.
         let hits = idx2.search(&ctx(), &unit_vec(4, 1), 5).await.unwrap();
         assert!(
@@ -556,7 +540,9 @@ mod tests {
     #[tokio::test]
     async fn load_returns_fresh_index_when_storage_empty() {
         let storage: Arc<dyn Storage> = Arc::new(MemoryStorage::default());
-        let idx = HnswVectorIndex::load(&ctx(), storage.as_ref(), 4).await.unwrap();
+        let idx = HnswVectorIndex::load(&ctx(), storage.as_ref(), 4)
+            .await
+            .unwrap();
         assert_eq!(idx.dimensions(), 4);
         // Empty — search returns no hits.
         let hits = idx.search(&ctx(), &unit_vec(4, 0), 5).await.unwrap();
@@ -573,7 +559,10 @@ mod tests {
         idx1.persist(&ctx(), storage.as_ref()).await.unwrap();
         let r = HnswVectorIndex::load(&ctx(), storage.as_ref(), 8).await;
         match r {
-            Err(VectorIndexError::DimensionMismatch { provided: 8, expected: 4 }) => {}
+            Err(VectorIndexError::DimensionMismatch {
+                provided: 8,
+                expected: 4,
+            }) => {}
             other => panic!("expected DimensionMismatch, got {other:?}"),
         }
     }

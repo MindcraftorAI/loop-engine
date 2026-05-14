@@ -31,8 +31,8 @@ fn parse_skill_file(bytes: &[u8]) -> Result<(SkillFrontmatter, String), EngineEr
         .map_err(|e| EngineError::Parse(format!("non-utf8 skill bytes: {e}")))?;
     let split = split_frontmatter_normalized(content)
         .map_err(|e| EngineError::Parse(format!("split frontmatter: {e}")))?;
-    let fm: SkillFrontmatter = serde_yml::from_str(&split.yaml)
-        .map_err(|e| EngineError::Yaml(Box::new(e)))?;
+    let fm: SkillFrontmatter =
+        serde_yml::from_str(&split.yaml).map_err(|e| EngineError::Yaml(Box::new(e)))?;
     Ok((fm, split.body))
 }
 
@@ -55,9 +55,7 @@ pub async fn insert(
     let body = body.into();
     let key = StorageKey::skill(ctx, id);
     if storage.get(&key).await?.is_some() {
-        return Err(EngineError::Parse(format!(
-            "skill already exists: {id}"
-        )));
+        return Err(EngineError::Parse(format!("skill already exists: {id}")));
     }
     let yaml = render_skill_yaml(&frontmatter, &body)?;
     storage.put(&key, Bytes::from(yaml)).await?;
@@ -198,9 +196,7 @@ pub async fn delete(
         if let Some(bytes) = storage.get(&key).await? {
             let (fm, _body) = parse_skill_file(&bytes)?;
             if fm.authored_by.is_user() {
-                return Err(EngineError::UserSkillImmune {
-                    id: id.to_string(),
-                    });
+                return Err(EngineError::UserSkillImmune { id: id.to_string() });
             }
         }
     }
@@ -223,9 +219,15 @@ mod tests {
     async fn insert_then_get_round_trips() {
         let storage: Arc<dyn Storage> = Arc::new(MemoryStorage::default());
         let fm = SkillFrontmatter::new("formatter", "auto-format on save");
-        let s = insert(&ctx(), storage.as_ref(), "skl-fmt00001", fm.clone(), "body content")
-            .await
-            .unwrap();
+        let s = insert(
+            &ctx(),
+            storage.as_ref(),
+            "skl-fmt00001",
+            fm.clone(),
+            "body content",
+        )
+        .await
+        .unwrap();
         assert_eq!(s.frontmatter.name, "formatter");
         let loaded = get_by_id(&ctx(), storage.as_ref(), "skl-fmt00001")
             .await
@@ -239,7 +241,9 @@ mod tests {
     async fn insert_rejects_existing_id() {
         let storage: Arc<dyn Storage> = Arc::new(MemoryStorage::default());
         let fm = SkillFrontmatter::new("formatter", "x");
-        insert(&ctx(), storage.as_ref(), "skl-dupe0001", fm.clone(), "body").await.unwrap();
+        insert(&ctx(), storage.as_ref(), "skl-dupe0001", fm.clone(), "body")
+            .await
+            .unwrap();
         let r = insert(&ctx(), storage.as_ref(), "skl-dupe0001", fm, "body again").await;
         assert!(matches!(r, Err(EngineError::Parse(_))));
     }
@@ -247,7 +251,9 @@ mod tests {
     #[tokio::test]
     async fn get_by_id_returns_none_for_missing() {
         let storage: Arc<dyn Storage> = Arc::new(MemoryStorage::default());
-        let r = get_by_id(&ctx(), storage.as_ref(), "skl-noexist1").await.unwrap();
+        let r = get_by_id(&ctx(), storage.as_ref(), "skl-noexist1")
+            .await
+            .unwrap();
         assert!(r.is_none());
     }
 
@@ -256,7 +262,9 @@ mod tests {
         let storage: Arc<dyn Storage> = Arc::new(MemoryStorage::default());
         for id in ["skl-list0001", "skl-list0002", "skl-list0003"] {
             let fm = SkillFrontmatter::new("name", "desc");
-            insert(&ctx(), storage.as_ref(), id, fm, "body").await.unwrap();
+            insert(&ctx(), storage.as_ref(), id, fm, "body")
+                .await
+                .unwrap();
         }
         let skills = list(&ctx(), storage.as_ref()).await.unwrap();
         assert_eq!(skills.len(), 3);
@@ -266,7 +274,9 @@ mod tests {
     async fn update_mutates_frontmatter() {
         let storage: Arc<dyn Storage> = Arc::new(MemoryStorage::default());
         let fm = SkillFrontmatter::new("formatter", "original desc");
-        insert(&ctx(), storage.as_ref(), "skl-upd00001", fm, "body").await.unwrap();
+        insert(&ctx(), storage.as_ref(), "skl-upd00001", fm, "body")
+            .await
+            .unwrap();
         let updated = update(&ctx(), storage.as_ref(), "skl-upd00001", |fm, _| {
             fm.description = "new desc".to_string();
             fm.status = SkillStatus::Active;
@@ -282,14 +292,19 @@ mod tests {
         let storage: Arc<dyn Storage> = Arc::new(MemoryStorage::default());
         let mut fm = SkillFrontmatter::new("formatter", "x");
         fm.authored_by = Authorship::User;
-        insert(&ctx(), storage.as_ref(), "skl-usr00001", fm, "body").await.unwrap();
+        insert(&ctx(), storage.as_ref(), "skl-usr00001", fm, "body")
+            .await
+            .unwrap();
         let r = archive(&ctx(), storage.as_ref(), "skl-usr00001", false).await;
         match r {
             Err(EngineError::UserSkillImmune { id, .. }) => assert_eq!(id, "skl-usr00001"),
             other => panic!("expected UserSkillImmune, got {other:?}"),
         }
         // Skill remains Draft.
-        let s = get_by_id(&ctx(), storage.as_ref(), "skl-usr00001").await.unwrap().unwrap();
+        let s = get_by_id(&ctx(), storage.as_ref(), "skl-usr00001")
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(s.frontmatter.status, SkillStatus::Draft);
     }
 
@@ -298,8 +313,12 @@ mod tests {
         let storage: Arc<dyn Storage> = Arc::new(MemoryStorage::default());
         let mut fm = SkillFrontmatter::new("formatter", "x");
         fm.authored_by = Authorship::User;
-        insert(&ctx(), storage.as_ref(), "skl-frc00001", fm, "body").await.unwrap();
-        let archived = archive(&ctx(), storage.as_ref(), "skl-frc00001", true).await.unwrap();
+        insert(&ctx(), storage.as_ref(), "skl-frc00001", fm, "body")
+            .await
+            .unwrap();
+        let archived = archive(&ctx(), storage.as_ref(), "skl-frc00001", true)
+            .await
+            .unwrap();
         assert_eq!(archived.frontmatter.status, SkillStatus::Archived);
     }
 
@@ -307,8 +326,12 @@ mod tests {
     async fn archive_force_false_succeeds_on_llm_authored() {
         let storage: Arc<dyn Storage> = Arc::new(MemoryStorage::default());
         let fm = SkillFrontmatter::new("formatter", "x"); // default authored_by = Llm
-        insert(&ctx(), storage.as_ref(), "skl-llm00001", fm, "body").await.unwrap();
-        let archived = archive(&ctx(), storage.as_ref(), "skl-llm00001", false).await.unwrap();
+        insert(&ctx(), storage.as_ref(), "skl-llm00001", fm, "body")
+            .await
+            .unwrap();
+        let archived = archive(&ctx(), storage.as_ref(), "skl-llm00001", false)
+            .await
+            .unwrap();
         assert_eq!(archived.frontmatter.status, SkillStatus::Archived);
     }
 
@@ -317,11 +340,16 @@ mod tests {
         let storage: Arc<dyn Storage> = Arc::new(MemoryStorage::default());
         let mut fm = SkillFrontmatter::new("formatter", "x");
         fm.authored_by = Authorship::User;
-        insert(&ctx(), storage.as_ref(), "skl-del00001", fm, "body").await.unwrap();
+        insert(&ctx(), storage.as_ref(), "skl-del00001", fm, "body")
+            .await
+            .unwrap();
         let r = delete(&ctx(), storage.as_ref(), "skl-del00001", false).await;
         assert!(matches!(r, Err(EngineError::UserSkillImmune { .. })));
         // Skill still present.
-        assert!(get_by_id(&ctx(), storage.as_ref(), "skl-del00001").await.unwrap().is_some());
+        assert!(get_by_id(&ctx(), storage.as_ref(), "skl-del00001")
+            .await
+            .unwrap()
+            .is_some());
     }
 
     #[tokio::test]
@@ -329,16 +357,27 @@ mod tests {
         let storage: Arc<dyn Storage> = Arc::new(MemoryStorage::default());
         let mut fm = SkillFrontmatter::new("formatter", "x");
         fm.authored_by = Authorship::User;
-        insert(&ctx(), storage.as_ref(), "skl-rmf00001", fm, "body").await.unwrap();
-        delete(&ctx(), storage.as_ref(), "skl-rmf00001", true).await.unwrap();
-        assert!(get_by_id(&ctx(), storage.as_ref(), "skl-rmf00001").await.unwrap().is_none());
+        insert(&ctx(), storage.as_ref(), "skl-rmf00001", fm, "body")
+            .await
+            .unwrap();
+        delete(&ctx(), storage.as_ref(), "skl-rmf00001", true)
+            .await
+            .unwrap();
+        assert!(get_by_id(&ctx(), storage.as_ref(), "skl-rmf00001")
+            .await
+            .unwrap()
+            .is_none());
     }
 
     #[tokio::test]
     async fn delete_idempotent_for_absent_id() {
         let storage: Arc<dyn Storage> = Arc::new(MemoryStorage::default());
         // Delete an id that never existed — should be Ok regardless of force.
-        delete(&ctx(), storage.as_ref(), "skl-noexist1", false).await.unwrap();
-        delete(&ctx(), storage.as_ref(), "skl-noexist1", true).await.unwrap();
+        delete(&ctx(), storage.as_ref(), "skl-noexist1", false)
+            .await
+            .unwrap();
+        delete(&ctx(), storage.as_ref(), "skl-noexist1", true)
+            .await
+            .unwrap();
     }
 }

@@ -71,14 +71,16 @@ async fn narrative_generation_produces_struct_consumed_by_manifest_gate() {
     let mut config = AssembleConfig::default();
     config.record_applied = false;
     let m_before = assemble(&ctx, storage.as_ref(), None, None, None, &config, now())
-    .await
-    .unwrap();
+        .await
+        .unwrap();
     assert_eq!(m_before.active_lessons.len(), 1);
     let gate_before = m_before.active_lessons[0].gate.as_ref().expect("gate");
     use loop_engine::engine::lessons::{BlockReason, GateDecision};
     match gate_before {
         GateDecision::Block { reasons } => {
-            assert!(reasons.iter().any(|r| matches!(r, BlockReason::MissingCausalNarrative)));
+            assert!(reasons
+                .iter()
+                .any(|r| matches!(r, BlockReason::MissingCausalNarrative)));
         }
         other => panic!("expected pre-narrative block, got {other:?}"),
     }
@@ -107,10 +109,11 @@ async fn narrative_generation_produces_struct_consumed_by_manifest_gate() {
     assert_eq!(narrative.trigger, "user kept committing unformatted code");
 
     // 4. Persist the narrative by rewriting the lesson with it.
-    use loop_engine::engine::yaml::{
-        combine_frontmatter, writer::serialize_lesson_frontmatter,
-    };
-    let loaded = get_by_id(&ctx, storage.as_ref(), id).await.unwrap().unwrap();
+    use loop_engine::engine::yaml::{combine_frontmatter, writer::serialize_lesson_frontmatter};
+    let loaded = get_by_id(&ctx, storage.as_ref(), id)
+        .await
+        .unwrap()
+        .unwrap();
     let mut fm = loaded.frontmatter;
     fm.causal_narrative = Some(narrative);
     let new_yaml = serialize_lesson_frontmatter(&fm);
@@ -128,9 +131,17 @@ async fn narrative_generation_produces_struct_consumed_by_manifest_gate() {
     //    shape, not just "Promote or Block".
     let mut config_after = AssembleConfig::default();
     config_after.record_applied = false;
-    let m_after = assemble(&ctx, storage.as_ref(), None, None, None, &config_after, now())
-        .await
-        .unwrap();
+    let m_after = assemble(
+        &ctx,
+        storage.as_ref(),
+        None,
+        None,
+        None,
+        &config_after,
+        now(),
+    )
+    .await
+    .unwrap();
     let gate_after = m_after.active_lessons[0]
         .gate
         .as_ref()
@@ -164,9 +175,9 @@ async fn narrative_generation_produces_struct_consumed_by_manifest_gate() {
                  reasons={reasons:?}"
             );
         }
-        other => panic!(
-            "expected Block (TamperedAge remains after narrative persist), got {other:?}"
-        ),
+        other => {
+            panic!("expected Block (TamperedAge remains after narrative persist), got {other:?}")
+        }
     }
 }
 
@@ -211,7 +222,10 @@ async fn narrative_validation_failure_does_not_persist() {
     assert!(result.is_err(), "validation should have failed");
 
     // Storage-level invariant: lesson body unchanged.
-    let loaded = get_by_id(&ctx, storage.as_ref(), id).await.unwrap().unwrap();
+    let loaded = get_by_id(&ctx, storage.as_ref(), id)
+        .await
+        .unwrap()
+        .unwrap();
     assert!(loaded.frontmatter.causal_narrative.is_none());
 
     // End-to-end invariant: manifest assembly still surfaces
@@ -219,7 +233,9 @@ async fn narrative_validation_failure_does_not_persist() {
     // rejected narrative was never persisted.
     let mut config = Cfg::default();
     config.record_applied = false;
-    let m = assemble(&ctx, storage.as_ref(), None, None, None, &config, now()).await.unwrap();
+    let m = assemble(&ctx, storage.as_ref(), None, None, None, &config, now())
+        .await
+        .unwrap();
     let gate = m.active_lessons[0].gate.as_ref().expect("gate");
     match gate {
         GateDecision::Block { reasons } => {

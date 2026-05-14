@@ -21,9 +21,7 @@ use serde::{Deserialize, Serialize};
 /// schema forward-compats with Anthropic's growing event list.
 /// Engine doesn't validate event names — host adapter recognizes
 /// what it cares about.
-#[derive(
-    Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct HookEvent(pub String);
 

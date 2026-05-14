@@ -35,8 +35,7 @@ async fn end_to_end_positive_signal_flows_classifier_through_writer() {
         }],
         global_hazards: vec![],
     };
-    let classifier =
-        Arc::new(MockSentimentClassifier::default().with_response(canned.clone()));
+    let classifier = Arc::new(MockSentimentClassifier::default().with_response(canned.clone()));
     let writer = Arc::new(MockSignalWriter::default());
     let orch = Orchestrator::new(
         classifier.clone() as Arc<dyn SentimentClassifier>,

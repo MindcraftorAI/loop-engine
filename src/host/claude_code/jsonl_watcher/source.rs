@@ -50,12 +50,11 @@ impl EventSource for JsonlWatcherSource {
             Ok(h) => h,
             Err(e) => {
                 let display = e.to_string();
-                let stream =
-                    futures::stream::once(async move {
-                        Err(EventSourceError::fatal(std::io::Error::other(format!(
-                            "JsonlWatcherSource init: {display}"
-                        ))))
-                    });
+                let stream = futures::stream::once(async move {
+                    Err(EventSourceError::fatal(std::io::Error::other(format!(
+                        "JsonlWatcherSource init: {display}"
+                    ))))
+                });
                 return Box::pin(stream);
             }
         };
@@ -69,8 +68,7 @@ impl EventSource for JsonlWatcherSource {
         });
 
         let receiver_stream = UnboundedReceiverStream::new(rx);
-        let translated =
-            receiver_stream.filter_map(|w_evt| async move { Some(translate(w_evt)) });
+        let translated = receiver_stream.filter_map(|w_evt| async move { Some(translate(w_evt)) });
         Box::pin(translated)
     }
 
@@ -240,11 +238,8 @@ mod tests {
 
     #[test]
     fn derive_project_tag_prefers_git_branch() {
-        let tag = derive_project_tag(
-            &Some("feature/x".into()),
-            Path::new("/tmp/projects/myrepo"),
-        )
-        .unwrap();
+        let tag = derive_project_tag(&Some("feature/x".into()), Path::new("/tmp/projects/myrepo"))
+            .unwrap();
         assert_eq!(tag.as_str(), "feature/x");
     }
 
@@ -256,8 +251,7 @@ mod tests {
 
     #[test]
     fn derive_project_tag_empty_branch_falls_back_to_cwd() {
-        let tag =
-            derive_project_tag(&Some("".into()), Path::new("/tmp/projects/myrepo")).unwrap();
+        let tag = derive_project_tag(&Some("".into()), Path::new("/tmp/projects/myrepo")).unwrap();
         assert_eq!(tag.as_str(), "myrepo");
     }
 

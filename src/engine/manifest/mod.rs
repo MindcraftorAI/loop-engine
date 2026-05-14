@@ -29,9 +29,7 @@ use tracing::warn;
 use crate::engine::context::Context;
 use crate::engine::embedding::Embedder;
 use crate::engine::error::EngineError;
-use crate::engine::lessons::{
-    check_promotion_gate, record_applied, GateDecision, PromotionConfig,
-};
+use crate::engine::lessons::{check_promotion_gate, record_applied, GateDecision, PromotionConfig};
 use crate::engine::memory::{self, MemoryQuery, MemoryRef};
 use crate::engine::storage::{Storage, StorageKey};
 use crate::engine::vector::VectorIndex;
@@ -354,7 +352,10 @@ pub async fn assemble(
             // Approximates "k results matching the filter" without
             // requiring the vector backend to be scope-aware.
             let raw_limit = if config.memory_scope_filter.is_some() {
-                config.memory_limit.saturating_mul(2).max(config.memory_limit)
+                config
+                    .memory_limit
+                    .saturating_mul(2)
+                    .max(config.memory_limit)
             } else {
                 config.memory_limit
             };
@@ -415,13 +416,12 @@ pub async fn assemble(
     })
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bytes::Bytes;
     use crate::engine::memory::MemoryId;
     use crate::engine::test_support::TestHarness;
+    use bytes::Bytes;
 
     #[test]
     fn assemble_config_default_matches_locked_decisions() {
@@ -502,8 +502,12 @@ mod tests {
     #[tokio::test]
     async fn assemble_lists_active_lessons_from_in_memory_storage() {
         let h = TestHarness::in_memory();
-        h.seed_lesson("active", "les-aaaaaaaa", "first body").await.unwrap();
-        h.seed_lesson("active", "les-bbbbbbbb", "second body").await.unwrap();
+        h.seed_lesson("active", "les-aaaaaaaa", "first body")
+            .await
+            .unwrap();
+        h.seed_lesson("active", "les-bbbbbbbb", "second body")
+            .await
+            .unwrap();
 
         let m = assemble(
             &h.ctx,
@@ -526,7 +530,9 @@ mod tests {
     async fn assemble_filters_by_configured_statuses() {
         let h = TestHarness::in_memory();
         h.seed_lesson("active", "les-active01", "x").await.unwrap();
-        h.seed_lesson("promoted", "les-promot01", "y").await.unwrap();
+        h.seed_lesson("promoted", "les-promot01", "y")
+            .await
+            .unwrap();
         h.seed_lesson("pending", "les-pendin01", "z").await.unwrap();
 
         // Default config: statuses = [Active] only.
@@ -549,9 +555,17 @@ mod tests {
             statuses: vec![LessonStatus::Active, LessonStatus::Promoted],
             ..AssembleConfig::default()
         };
-        let m = assemble(&h.ctx, h.storage.as_ref(), None, None, None, &config, now_t())
-            .await
-            .unwrap();
+        let m = assemble(
+            &h.ctx,
+            h.storage.as_ref(),
+            None,
+            None,
+            None,
+            &config,
+            now_t(),
+        )
+        .await
+        .unwrap();
         assert_eq!(m.active_lessons.len(), 2);
     }
 
@@ -560,15 +574,25 @@ mod tests {
         let h = TestHarness::in_memory();
         for i in 0..10 {
             let id = format!("les-aaaaaaa{i}");
-            h.seed_lesson("active", &id, &format!("body {i}")).await.unwrap();
+            h.seed_lesson("active", &id, &format!("body {i}"))
+                .await
+                .unwrap();
         }
         let config = AssembleConfig {
             lesson_limit: 3,
             ..AssembleConfig::default()
         };
-        let m = assemble(&h.ctx, h.storage.as_ref(), None, None, None, &config, now_t())
-            .await
-            .unwrap();
+        let m = assemble(
+            &h.ctx,
+            h.storage.as_ref(),
+            None,
+            None,
+            None,
+            &config,
+            now_t(),
+        )
+        .await
+        .unwrap();
         assert_eq!(m.assembly_stats.total_listed, 10);
         assert_eq!(m.active_lessons.len(), 3);
     }
@@ -579,9 +603,15 @@ mod tests {
         // no `last_applied_at` → tie on first two keys; id ASC as
         // the final tiebreaker decides.
         let h = TestHarness::in_memory();
-        h.seed_lesson("active", "les-zzzzzzzz", "z body").await.unwrap();
-        h.seed_lesson("active", "les-aaaaaaaa", "a body").await.unwrap();
-        h.seed_lesson("active", "les-mmmmmmmm", "m body").await.unwrap();
+        h.seed_lesson("active", "les-zzzzzzzz", "z body")
+            .await
+            .unwrap();
+        h.seed_lesson("active", "les-aaaaaaaa", "a body")
+            .await
+            .unwrap();
+        h.seed_lesson("active", "les-mmmmmmmm", "m body")
+            .await
+            .unwrap();
 
         let m = assemble(
             &h.ctx,
@@ -608,11 +638,7 @@ mod tests {
         // Seed three lessons with same created_at but distinct
         // last_applied_at; expect newest-applied first.
         let h = TestHarness::in_memory();
-        async fn put_with_last_applied(
-            h: &TestHarness,
-            id: &str,
-            last_applied_at_iso: &str,
-        ) {
+        async fn put_with_last_applied(h: &TestHarness, id: &str, last_applied_at_iso: &str) {
             let yaml = format!(
                 "---\n\
                  id: {id}\n\
@@ -654,7 +680,9 @@ mod tests {
         use crate::engine::storage::StorageKey;
         let h = TestHarness::in_memory();
         // One good lesson, one with broken YAML.
-        h.seed_lesson("active", "les-aaaaaaaa", "good body").await.unwrap();
+        h.seed_lesson("active", "les-aaaaaaaa", "good body")
+            .await
+            .unwrap();
         let bad_key = StorageKey::lesson(&h.ctx, "active", "les-broken01");
         h.storage
             .put(&bad_key, Bytes::from_static(b"no frontmatter here\n"))
@@ -694,9 +722,17 @@ mod tests {
             body_preview_len: 10,
             ..AssembleConfig::default()
         };
-        let m = assemble(&h.ctx, h.storage.as_ref(), None, None, None, &config, now_t())
-            .await
-            .unwrap();
+        let m = assemble(
+            &h.ctx,
+            h.storage.as_ref(),
+            None,
+            None,
+            None,
+            &config,
+            now_t(),
+        )
+        .await
+        .unwrap();
         let lesson = &m.active_lessons[0];
         // Take 10 chars then trim — "this is a " loses the trailing
         // space, leaving 9 chars. The take-then-trim order is the
@@ -710,8 +746,12 @@ mod tests {
         // Real LocalFsStorage — proves the path-extraction + storage
         // listing both work end-to-end on disk.
         let h = TestHarness::on_disk();
-        h.seed_lesson("active", "les-ondisk01", "on-disk body").await.unwrap();
-        h.seed_lesson("active", "les-ondisk02", "another").await.unwrap();
+        h.seed_lesson("active", "les-ondisk01", "on-disk body")
+            .await
+            .unwrap();
+        h.seed_lesson("active", "les-ondisk02", "another")
+            .await
+            .unwrap();
         let m = assemble(
             &h.ctx,
             h.storage.as_ref(),
@@ -734,7 +774,9 @@ mod tests {
     #[tokio::test]
     async fn assemble_attaches_gate_decision_when_annotate_with_gate_true() {
         let h = TestHarness::in_memory();
-        h.seed_lesson("active", "les-gate0001", "body").await.unwrap();
+        h.seed_lesson("active", "les-gate0001", "body")
+            .await
+            .unwrap();
         let m = assemble(
             &h.ctx,
             h.storage.as_ref(),
@@ -756,14 +798,24 @@ mod tests {
     #[tokio::test]
     async fn assemble_skips_gate_when_annotate_with_gate_false() {
         let h = TestHarness::in_memory();
-        h.seed_lesson("active", "les-noggate01", "body").await.unwrap();
+        h.seed_lesson("active", "les-noggate01", "body")
+            .await
+            .unwrap();
         let config = AssembleConfig {
             annotate_with_gate: false,
             ..AssembleConfig::default()
         };
-        let m = assemble(&h.ctx, h.storage.as_ref(), None, None, None, &config, now_t())
-            .await
-            .unwrap();
+        let m = assemble(
+            &h.ctx,
+            h.storage.as_ref(),
+            None,
+            None,
+            None,
+            &config,
+            now_t(),
+        )
+        .await
+        .unwrap();
         assert_eq!(m.active_lessons.len(), 1);
         assert!(m.active_lessons[0].gate.is_none());
         assert_eq!(m.assembly_stats.gate_skip_count, 0);
@@ -773,7 +825,9 @@ mod tests {
     async fn assemble_record_applied_increments_counter_by_default() {
         use crate::engine::lessons::get_by_id;
         let h = TestHarness::in_memory();
-        h.seed_lesson("active", "les-counter1", "body").await.unwrap();
+        h.seed_lesson("active", "les-counter1", "body")
+            .await
+            .unwrap();
         // applied_count starts at 0 (TestHarness default).
         let m = assemble(
             &h.ctx,
@@ -801,14 +855,24 @@ mod tests {
     async fn assemble_record_applied_skipped_when_record_applied_false() {
         use crate::engine::lessons::get_by_id;
         let h = TestHarness::in_memory();
-        h.seed_lesson("active", "les-noinc001", "body").await.unwrap();
+        h.seed_lesson("active", "les-noinc001", "body")
+            .await
+            .unwrap();
         let config = AssembleConfig {
             record_applied: false,
             ..AssembleConfig::default()
         };
-        let _ = assemble(&h.ctx, h.storage.as_ref(), None, None, None, &config, now_t())
-            .await
-            .unwrap();
+        let _ = assemble(
+            &h.ctx,
+            h.storage.as_ref(),
+            None,
+            None,
+            None,
+            &config,
+            now_t(),
+        )
+        .await
+        .unwrap();
         let after = get_by_id(&h.ctx, h.storage.as_ref(), "les-noinc001")
             .await
             .unwrap()
@@ -893,9 +957,7 @@ mod tests {
                     reasons[0]
                 );
             }
-            other => panic!(
-                "wedge: expected Block on backdated lesson, got {other:?}"
-            ),
+            other => panic!("wedge: expected Block on backdated lesson, got {other:?}"),
         }
 
         // Verify cross-cutting behavior: even though the gate blocks
@@ -904,7 +966,10 @@ mod tests {
         // counter from 5 → 6. Wedge blocks PROMOTION, not manifest
         // delivery or applied tracking.
         use crate::engine::lessons::get_by_id;
-        let after = get_by_id(&h.ctx, h.storage.as_ref(), id).await.unwrap().unwrap();
+        let after = get_by_id(&h.ctx, h.storage.as_ref(), id)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(after.frontmatter.applied_count, 6);
     }
 
@@ -1048,8 +1113,9 @@ mod tests {
 
         // Prune-everything predicate.
         let pred: crate::engine::memory::PrunePredicate = Box::new(|_fm| true);
-        let stats =
-            memory::prune(&h.ctx, h.storage.as_ref(), &vector_index, pred).await.unwrap();
+        let stats = memory::prune(&h.ctx, h.storage.as_ref(), &vector_index, pred)
+            .await
+            .unwrap();
         assert_eq!(stats.pruned, 0, "user-immune memory MUST survive prune");
         assert_eq!(stats.skipped_user_immune, 1);
 
@@ -1070,7 +1136,11 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(m.memories.len(), 1, "user-immune memory MUST still be discoverable");
+        assert_eq!(
+            m.memories.len(),
+            1,
+            "user-immune memory MUST still be discoverable"
+        );
         assert_eq!(m.memories[0].id, mid);
     }
 
@@ -1109,15 +1179,18 @@ mod tests {
         // does NOT apply.
 
         let pred: crate::engine::memory::PrunePredicate = Box::new(|_fm| true);
-        let stats =
-            memory::prune(&h.ctx, h.storage.as_ref(), &vector_index, pred).await.unwrap();
+        let stats = memory::prune(&h.ctx, h.storage.as_ref(), &vector_index, pred)
+            .await
+            .unwrap();
         assert_eq!(
             stats.pruned, 1,
             "uncited memory MUST be evicted by a prune-everything predicate"
         );
         assert_eq!(stats.skipped_user_immune, 0);
         // Memory is GONE from storage.
-        let after = memory::get_by_id(&h.ctx, h.storage.as_ref(), &mid).await.unwrap();
+        let after = memory::get_by_id(&h.ctx, h.storage.as_ref(), &mid)
+            .await
+            .unwrap();
         assert!(after.is_none(), "memory should be deleted from storage");
     }
 

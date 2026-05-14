@@ -34,6 +34,7 @@ fn matches_ts_load_path_byte_output() {
         thumbs_up_count: 1,
         thumbs_down_count: 0,
         external_signal_sources: vec!["user_thumbs_up".into(), "sentiment_positive".into()],
+        applied_session_ids: vec![],
         promotion_eligible_at: Some("2026-05-14T00:00:00.000Z".into()),
         superseded_by: None,
         superseded_at: None,

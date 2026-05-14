@@ -5,8 +5,8 @@
 //! Production code uses [`super::LocalFsStorage`].
 
 use std::collections::BTreeMap;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -136,10 +136,7 @@ impl Storage for MemoryStorage {
         Ok(guard.get(key).map(|e| (e.bytes.clone(), e.version.clone())))
     }
 
-    async fn metadata(
-        &self,
-        key: &StorageKey,
-    ) -> Result<Option<StorageMetadata>, StorageError> {
+    async fn metadata(&self, key: &StorageKey) -> Result<Option<StorageMetadata>, StorageError> {
         let guard = self.inner.lock().expect("MemoryStorage mutex poisoned");
         Ok(guard.get(key).map(|e| StorageMetadata {
             birthtime: Some(e.created_at),
@@ -207,10 +204,7 @@ mod tests {
             .map(|k| k.as_str().to_string())
             .collect();
         keys.sort();
-        assert_eq!(
-            keys,
-            vec!["lessons/active/a.md", "lessons/active/b.md"]
-        );
+        assert_eq!(keys, vec!["lessons/active/a.md", "lessons/active/b.md"]);
     }
 
     #[tokio::test]

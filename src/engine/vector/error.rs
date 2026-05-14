@@ -71,8 +71,7 @@ mod tests {
 
     #[test]
     fn from_into_engine_error() {
-        let err: EngineError =
-            VectorIndexError::InvalidVector("contains NaN".into()).into();
+        let err: EngineError = VectorIndexError::InvalidVector("contains NaN".into()).into();
         assert!(matches!(err, EngineError::VectorIndex(_)));
     }
 }

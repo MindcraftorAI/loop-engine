@@ -150,8 +150,7 @@ pub async fn compress(
     //    transfer.
     let mut predecessor_ids = resolve_window(ctx, storage, window).await?;
     {
-        let mut seen: std::collections::HashSet<MemoryId> =
-            std::collections::HashSet::new();
+        let mut seen: std::collections::HashSet<MemoryId> = std::collections::HashSet::new();
         predecessor_ids.retain(|id| seen.insert(id.clone()));
     }
     if predecessor_ids.is_empty() {
@@ -163,9 +162,7 @@ pub async fn compress(
     for id in &predecessor_ids {
         let mem = get_by_id(ctx, storage, id)
             .await?
-            .ok_or_else(|| EngineError::Parse(format!(
-                "compress: predecessor {id} not found"
-            )))?;
+            .ok_or_else(|| EngineError::Parse(format!("compress: predecessor {id} not found")))?;
         predecessors.push(mem);
     }
 
@@ -231,9 +228,9 @@ pub async fn compress(
     let mut emb = embedder
         .embed(ctx, std::slice::from_ref(&draft.content))
         .await?;
-    let embedding = emb.pop().ok_or_else(|| {
-        EngineError::Parse("embedder returned zero vectors".into())
-    })?;
+    let embedding = emb
+        .pop()
+        .ok_or_else(|| EngineError::Parse("embedder returned zero vectors".into()))?;
     let yaml = render_memory_yaml(&fm, &draft.content)?;
     let md_key = StorageKey::memory(ctx, fm.id.as_str());
     storage.put(&md_key, Bytes::from(yaml)).await?;
@@ -327,9 +324,8 @@ fn discriminate_compress_output(parsed: Value) -> Result<CompressedDraft, Engine
     if parsed.get("error").is_some() {
         return Err(EngineError::CompressionInsufficientInput);
     }
-    serde_json::from_value::<CompressedDraft>(parsed).map_err(|e| {
-        EngineError::from(LlmError::InvalidOutput(format!("compress parse: {e}")))
-    })
+    serde_json::from_value::<CompressedDraft>(parsed)
+        .map_err(|e| EngineError::from(LlmError::InvalidOutput(format!("compress parse: {e}"))))
 }
 
 /// D-Cx7 parse-time validation. Char-count (not bytes) per S141.
@@ -486,12 +482,14 @@ mod tests {
         assert!(mc.is_compressed());
         assert!(mc.embedding.is_some());
         // Persisted under its minted id.
-        assert!(
-            crate::engine::memory::store::get_by_id(&ctx(), storage.as_ref(), &mc.frontmatter.id)
-                .await
-                .unwrap()
-                .is_some()
-        );
+        assert!(crate::engine::memory::store::get_by_id(
+            &ctx(),
+            storage.as_ref(),
+            &mc.frontmatter.id
+        )
+        .await
+        .unwrap()
+        .is_some());
     }
 
     #[tokio::test]
@@ -502,15 +500,22 @@ mod tests {
         let ids = seed_memories(
             &storage,
             &vector_index,
-            &[("mem-cit00001", "a", "body a"), ("mem-cit00002", "b", "body b")],
+            &[
+                ("mem-cit00001", "a", "body a"),
+                ("mem-cit00002", "b", "body b"),
+            ],
         )
         .await;
         // Counter on M1 = 2, M2 = 3 → Mc should be 5.
         for _ in 0..2 {
-            increment_citation_count(&ctx(), storage.as_ref(), &ids[0]).await.unwrap();
+            increment_citation_count(&ctx(), storage.as_ref(), &ids[0])
+                .await
+                .unwrap();
         }
         for _ in 0..3 {
-            increment_citation_count(&ctx(), storage.as_ref(), &ids[1]).await.unwrap();
+            increment_citation_count(&ctx(), storage.as_ref(), &ids[1])
+                .await
+                .unwrap();
         }
         let llm = MockLlmClient::default().with_response(success_generation(
             r#"{"description": "s", "content": "c"}"#,
@@ -535,12 +540,7 @@ mod tests {
     async fn compress_refusal_sentinel_surfaces_as_insufficient_input() {
         let storage: Arc<dyn Storage> = Arc::new(MemoryStorage::default());
         let vector_index = HnswVectorIndex::new(4);
-        let ids = seed_memories(
-            &storage,
-            &vector_index,
-            &[("mem-thn00001", "x", "y")],
-        )
-        .await;
+        let ids = seed_memories(&storage, &vector_index, &[("mem-thn00001", "x", "y")]).await;
         let llm = MockLlmClient::default()
             .with_response(success_generation(r#"{"error": "insufficient_input"}"#));
         let embedder = MockEmbedder::new(4);
@@ -564,12 +564,7 @@ mod tests {
         // check wins over coincidentally-valid fields.
         let storage: Arc<dyn Storage> = Arc::new(MemoryStorage::default());
         let vector_index = HnswVectorIndex::new(4);
-        let ids = seed_memories(
-            &storage,
-            &vector_index,
-            &[("mem-mxd00001", "x", "y")],
-        )
-        .await;
+        let ids = seed_memories(&storage, &vector_index, &[("mem-mxd00001", "x", "y")]).await;
         let llm = MockLlmClient::default().with_response(success_generation(
             r#"{"error": "insufficient_input", "description": "fake", "content": "also fake"}"#,
         ));
@@ -612,16 +607,9 @@ mod tests {
     async fn compress_rejects_too_long_description() {
         let storage: Arc<dyn Storage> = Arc::new(MemoryStorage::default());
         let vector_index = HnswVectorIndex::new(4);
-        let ids = seed_memories(
-            &storage,
-            &vector_index,
-            &[("mem-vld00001", "x", "y")],
-        )
-        .await;
+        let ids = seed_memories(&storage, &vector_index, &[("mem-vld00001", "x", "y")]).await;
         let over_cap = "x".repeat(201);
-        let json = format!(
-            r#"{{"description": "{over_cap}", "content": "c"}}"#
-        );
+        let json = format!(r#"{{"description": "{over_cap}", "content": "c"}}"#);
         let llm = MockLlmClient::default().with_response(success_generation(&json));
         let embedder = MockEmbedder::new(4);
         let r = compress(
@@ -657,8 +645,7 @@ mod tests {
             ],
         )
         .await;
-        let predicate: PrunePredicate =
-            Box::new(|fm| fm.description.starts_with("include-me"));
+        let predicate: PrunePredicate = Box::new(|fm| fm.description.starts_with("include-me"));
         let llm = MockLlmClient::default().with_response(success_generation(
             r#"{"description": "s", "content": "c"}"#,
         ));
@@ -676,9 +663,11 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(mc.frontmatter.derived_from.len(), 2);
-        assert!(mc.frontmatter.derived_from.iter().all(|i| {
-            i.as_str() == "mem-prd00001" || i.as_str() == "mem-prd00002"
-        }));
+        assert!(mc
+            .frontmatter
+            .derived_from
+            .iter()
+            .all(|i| { i.as_str() == "mem-prd00001" || i.as_str() == "mem-prd00002" }));
     }
 
     #[tokio::test]

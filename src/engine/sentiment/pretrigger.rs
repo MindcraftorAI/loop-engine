@@ -249,9 +249,8 @@ mod tests {
 
     #[test]
     fn does_not_fire_on_neutral_text() {
-        assert!(!pretrigger().fires_on(
-            "could you read the file at src/main.rs and tell me the imports"
-        ));
+        assert!(!pretrigger()
+            .fires_on("could you read the file at src/main.rs and tell me the imports"));
     }
 
     #[test]
@@ -299,9 +298,7 @@ mod tests {
 
     #[test]
     fn fires_on_perfect_within_longer_sentence() {
-        assert!(pretrigger().fires_on(
-            "this is the perfect amount of detail thank you"
-        ));
+        assert!(pretrigger().fires_on("this is the perfect amount of detail thank you"));
     }
 
     #[test]

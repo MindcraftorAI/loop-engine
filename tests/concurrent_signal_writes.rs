@@ -48,6 +48,7 @@ fn write_initial_lesson(home: &TempDir, id: &str) -> std::path::PathBuf {
         thumbs_up_count: 0,
         thumbs_down_count: 0,
         external_signal_sources: vec![],
+        applied_session_ids: vec![],
         promotion_eligible_at: None,
         superseded_by: None,
         superseded_at: None,

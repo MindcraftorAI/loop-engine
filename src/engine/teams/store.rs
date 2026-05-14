@@ -21,8 +21,8 @@ fn parse_file(bytes: &[u8]) -> Result<(TeamFrontmatter, String), EngineError> {
         .map_err(|e| EngineError::Parse(format!("non-utf8 team bytes: {e}")))?;
     let split = split_frontmatter_normalized(content)
         .map_err(|e| EngineError::Parse(format!("split frontmatter: {e}")))?;
-    let fm: TeamFrontmatter = serde_yml::from_str(&split.yaml)
-        .map_err(|e| EngineError::Yaml(Box::new(e)))?;
+    let fm: TeamFrontmatter =
+        serde_yml::from_str(&split.yaml).map_err(|e| EngineError::Yaml(Box::new(e)))?;
     Ok((fm, split.body))
 }
 
@@ -176,8 +176,13 @@ mod tests {
             TeamMember::Persona("pers-a".into()),
             TeamMember::Skill("skl-b".into()),
         ];
-        insert(&ctx(), storage.as_ref(), "tm-engng", fm, "charter body").await.unwrap();
-        let t = get_by_id(&ctx(), storage.as_ref(), "tm-engng").await.unwrap().unwrap();
+        insert(&ctx(), storage.as_ref(), "tm-engng", fm, "charter body")
+            .await
+            .unwrap();
+        let t = get_by_id(&ctx(), storage.as_ref(), "tm-engng")
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(t.frontmatter.members.len(), 2);
         assert!(matches!(t.frontmatter.members[0], TeamMember::Persona(_)));
     }
@@ -187,7 +192,9 @@ mod tests {
         let storage: Arc<dyn Storage> = Arc::new(MemoryStorage::default());
         let mut fm = TeamFrontmatter::new("tm-usr00", "User Team", "");
         fm.authored_by = Authorship::User;
-        insert(&ctx(), storage.as_ref(), "tm-usr00", fm, "").await.unwrap();
+        insert(&ctx(), storage.as_ref(), "tm-usr00", fm, "")
+            .await
+            .unwrap();
         let r = archive(&ctx(), storage.as_ref(), "tm-usr00", false).await;
         assert!(matches!(r, Err(EngineError::UserTeamImmune { .. })));
     }
@@ -196,7 +203,9 @@ mod tests {
     async fn update_mutates_members_and_status() {
         let storage: Arc<dyn Storage> = Arc::new(MemoryStorage::default());
         let fm = TeamFrontmatter::new("tm-upd00", "Old", "old desc");
-        insert(&ctx(), storage.as_ref(), "tm-upd00", fm, "body").await.unwrap();
+        insert(&ctx(), storage.as_ref(), "tm-upd00", fm, "body")
+            .await
+            .unwrap();
         let r = update(&ctx(), storage.as_ref(), "tm-upd00", |fm, _body| {
             fm.name = "New".into();
             fm.status = TeamStatus::Active;
@@ -214,10 +223,15 @@ mod tests {
         let storage: Arc<dyn Storage> = Arc::new(MemoryStorage::default());
         let mut fm = TeamFrontmatter::new("tm-del00", "u", "x");
         fm.authored_by = Authorship::User;
-        insert(&ctx(), storage.as_ref(), "tm-del00", fm, "").await.unwrap();
+        insert(&ctx(), storage.as_ref(), "tm-del00", fm, "")
+            .await
+            .unwrap();
         let r = delete(&ctx(), storage.as_ref(), "tm-del00", false).await;
         assert!(matches!(r, Err(EngineError::UserTeamImmune { .. })));
-        assert!(get_by_id(&ctx(), storage.as_ref(), "tm-del00").await.unwrap().is_some());
+        assert!(get_by_id(&ctx(), storage.as_ref(), "tm-del00")
+            .await
+            .unwrap()
+            .is_some());
     }
 
     #[tokio::test]
@@ -225,9 +239,16 @@ mod tests {
         let storage: Arc<dyn Storage> = Arc::new(MemoryStorage::default());
         let mut fm = TeamFrontmatter::new("tm-rmf00", "u", "x");
         fm.authored_by = Authorship::User;
-        insert(&ctx(), storage.as_ref(), "tm-rmf00", fm, "").await.unwrap();
-        delete(&ctx(), storage.as_ref(), "tm-rmf00", true).await.unwrap();
-        assert!(get_by_id(&ctx(), storage.as_ref(), "tm-rmf00").await.unwrap().is_none());
+        insert(&ctx(), storage.as_ref(), "tm-rmf00", fm, "")
+            .await
+            .unwrap();
+        delete(&ctx(), storage.as_ref(), "tm-rmf00", true)
+            .await
+            .unwrap();
+        assert!(get_by_id(&ctx(), storage.as_ref(), "tm-rmf00")
+            .await
+            .unwrap()
+            .is_none());
     }
 
     #[tokio::test]

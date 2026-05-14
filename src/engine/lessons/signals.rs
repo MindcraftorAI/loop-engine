@@ -150,8 +150,8 @@ pub async fn record_signal(
             .map_err(|e| EngineError::Parse(format!("non-utf8 lesson bytes for {key}: {e}")))?;
         let split = split_frontmatter_normalized(content)
             .map_err(|e| EngineError::Parse(format!("split frontmatter {key}: {e}")))?;
-        let mut frontmatter = parse_lesson_frontmatter(&split.yaml)
-            .map_err(|e| EngineError::Yaml(e.into()))?;
+        let mut frontmatter =
+            parse_lesson_frontmatter(&split.yaml).map_err(|e| EngineError::Yaml(e.into()))?;
 
         // Idempotent: only push if not present.
         let source = polarity.signal_source();
@@ -235,16 +235,15 @@ pub async fn record_applied(
             .map_err(|e| EngineError::Parse(format!("non-utf8 lesson bytes for {key}: {e}")))?;
         let split = split_frontmatter_normalized(content)
             .map_err(|e| EngineError::Parse(format!("split frontmatter {key}: {e}")))?;
-        let mut frontmatter = parse_lesson_frontmatter(&split.yaml)
-            .map_err(|e| EngineError::Yaml(e.into()))?;
+        let mut frontmatter =
+            parse_lesson_frontmatter(&split.yaml).map_err(|e| EngineError::Yaml(e.into()))?;
 
         // The mutation: bump the counter, stamp the timestamp.
         frontmatter.applied_count = frontmatter.applied_count.saturating_add(1);
         frontmatter.last_applied_at =
             Some(now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
         // updated_at also bumps — matches TS-side `recordLessonApplied`.
-        frontmatter.updated_at =
-            Some(now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
+        frontmatter.updated_at = Some(now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
 
         let new_yaml = serialize_lesson_frontmatter(&frontmatter);
         let normalized_body = split.body.trim_start_matches('\n');
@@ -400,6 +399,7 @@ mod tests {
             thumbs_up_count: 0,
             thumbs_down_count: 0,
             external_signal_sources: initial_signals,
+            applied_session_ids: vec![],
             promotion_eligible_at: None,
             superseded_by: None,
             superseded_at: None,
@@ -712,7 +712,10 @@ mod tests {
         .unwrap();
         assert_eq!(
             updated.frontmatter.external_signal_sources,
-            vec!["user_thumbs_up".to_string(), "sentiment_positive".to_string()]
+            vec![
+                "user_thumbs_up".to_string(),
+                "sentiment_positive".to_string()
+            ]
         );
     }
 
@@ -912,7 +915,10 @@ mod tests {
         assert!(updated.frontmatter.last_applied_at.is_some());
         // Untouched fields:
         assert_eq!(updated.frontmatter.description, "original description");
-        assert_eq!(updated.frontmatter.target_skill.as_deref(), Some("some-skill"));
+        assert_eq!(
+            updated.frontmatter.target_skill.as_deref(),
+            Some("some-skill")
+        );
         assert_eq!(updated.frontmatter.thumbs_up_count, 3);
         assert_eq!(
             updated.frontmatter.external_signal_sources,

@@ -37,9 +37,7 @@ pub mod scope;
 // Phase E2 audit B-M2 extraction: chase + recompute live in
 // `lifecycle.rs`. Re-exported here so existing call sites continue
 // to work via `memory::recompute_citation_counts` etc.
-pub use lifecycle::{
-    get_by_id_chasing_derived_from, recompute_citation_counts, RecomputeStats,
-};
+pub use lifecycle::{get_by_id_chasing_derived_from, recompute_citation_counts, RecomputeStats};
 // `decrement_citation_count` is `pub(crate)` — Phase G consumes from
 // within the engine; not part of the external API.
 pub(crate) use store::decrement_citation_count;
@@ -98,11 +96,7 @@ impl MemoryFrontmatter {
     /// Construct a new frontmatter with required fields. `updated_at`,
     /// counters, and `derived_from` default to None/0/empty. `scope`
     /// defaults to [`MemoryScope::User`] — set via [`Self::with_scope`].
-    pub fn new(
-        id: MemoryId,
-        description: impl Into<String>,
-        created_at: DateTime<Utc>,
-    ) -> Self {
+    pub fn new(id: MemoryId, description: impl Into<String>, created_at: DateTime<Utc>) -> Self {
         Self {
             id,
             description: description.into(),
@@ -131,7 +125,11 @@ impl MemoryFrontmatter {
     /// provenance round-trip clean.
     #[must_use]
     pub fn with_origin(mut self, origin: MemoryOrigin) -> Self {
-        self.origin = if origin.is_empty() { None } else { Some(origin) };
+        self.origin = if origin.is_empty() {
+            None
+        } else {
+            Some(origin)
+        };
         self
     }
 }
@@ -259,11 +257,7 @@ mod tests {
 
     #[test]
     fn memory_new_no_embedding_by_default() {
-        let fm = MemoryFrontmatter::new(
-            MemoryId::new("mem-zzzzzzzz"),
-            "x",
-            Utc::now(),
-        );
+        let fm = MemoryFrontmatter::new(MemoryId::new("mem-zzzzzzzz"), "x", Utc::now());
         let m = Memory::new(fm, "body");
         assert_eq!(m.content, "body");
         assert!(m.embedding.is_none());
@@ -271,11 +265,7 @@ mod tests {
 
     #[test]
     fn memory_with_embedding_builder() {
-        let fm = MemoryFrontmatter::new(
-            MemoryId::new("mem-zzzzzzzz"),
-            "x",
-            Utc::now(),
-        );
+        let fm = MemoryFrontmatter::new(MemoryId::new("mem-zzzzzzzz"), "x", Utc::now());
         let m = Memory::new(fm, "body").with_embedding(vec![0.1, 0.2, 0.3]);
         assert_eq!(m.embedding.as_deref().map(|v| v.len()), Some(3));
     }

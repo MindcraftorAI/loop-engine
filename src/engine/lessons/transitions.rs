@@ -115,13 +115,12 @@ async fn move_lesson_file(
                 "lesson move: put_if_version returned Ok(false) but get returned None at {new_key}"
             ))
         })?;
-        let content = std::str::from_utf8(&existing).map_err(|e| {
-            EngineError::Parse(format!("non-utf8 lesson bytes at {new_key}: {e}"))
-        })?;
+        let content = std::str::from_utf8(&existing)
+            .map_err(|e| EngineError::Parse(format!("non-utf8 lesson bytes at {new_key}: {e}")))?;
         let split = split_frontmatter_normalized(content)
             .map_err(|e| EngineError::Parse(format!("split frontmatter {new_key}: {e}")))?;
-        let existing_fm = parse_lesson_frontmatter(&split.yaml)
-            .map_err(|e| EngineError::Yaml(e.into()))?;
+        let existing_fm =
+            parse_lesson_frontmatter(&split.yaml).map_err(|e| EngineError::Yaml(e.into()))?;
         if existing_fm.id != expected_id {
             return Err(EngineError::Parse(format!(
                 "lesson move: collision at {new_key} (expected id {expected_id}, found {})",
@@ -190,8 +189,8 @@ async fn promote_cas_loop(
             .map_err(|e| EngineError::Parse(format!("non-utf8 lesson bytes for {old_key}: {e}")))?;
         let split = split_frontmatter_normalized(content)
             .map_err(|e| EngineError::Parse(format!("split frontmatter {old_key}: {e}")))?;
-        let live_fm = parse_lesson_frontmatter(&split.yaml)
-            .map_err(|e| EngineError::Yaml(e.into()))?;
+        let live_fm =
+            parse_lesson_frontmatter(&split.yaml).map_err(|e| EngineError::Yaml(e.into()))?;
         let metadata = storage
             .metadata(old_key)
             .await?
@@ -307,14 +306,16 @@ fn yaml_inline_scalar(s: &str) -> String {
     if s.contains('\n') || s.contains('\r') {
         return "\"\"".to_string();
     }
-    let escaped: String = s.chars().fold(String::with_capacity(s.len() + 2), |mut acc, c| {
-        match c {
-            '"' => acc.push_str("\\\""),
-            '\\' => acc.push_str("\\\\"),
-            other => acc.push(other),
-        }
-        acc
-    });
+    let escaped: String = s
+        .chars()
+        .fold(String::with_capacity(s.len() + 2), |mut acc, c| {
+            match c {
+                '"' => acc.push_str("\\\""),
+                '\\' => acc.push_str("\\\\"),
+                other => acc.push(other),
+            }
+            acc
+        });
     format!("\"{escaped}\"")
 }
 
@@ -343,7 +344,10 @@ pub async fn discard(
     let new_yaml = serialize_lesson_frontmatter(&fm);
     let mut body = loaded.body.trim_start_matches('\n').to_string();
     if let Some(r) = reason {
-        body.push_str(&format!("\n<!-- discard reason: {r} at {} -->\n", now_iso(now)));
+        body.push_str(&format!(
+            "\n<!-- discard reason: {r} at {} -->\n",
+            now_iso(now)
+        ));
     }
     let new_bytes = Bytes::from(combine_frontmatter(&new_yaml, &body));
     let new_key = StorageKey::lesson(ctx, "discarded", id);
@@ -425,11 +429,16 @@ pub async fn supersede(
         });
     }
     // Load the old lesson + apply immunity guard.
-    let loaded = get_by_id(ctx, storage, old_id)
-        .await?
-        .ok_or_else(|| EngineError::LessonNotFound { id: old_id.to_string() })?;
+    let loaded =
+        get_by_id(ctx, storage, old_id)
+            .await?
+            .ok_or_else(|| EngineError::LessonNotFound {
+                id: old_id.to_string(),
+            })?;
     if !force && loaded.frontmatter.authored_by.is_user() {
-        return Err(EngineError::UserLessonImmune { id: old_id.to_string() });
+        return Err(EngineError::UserLessonImmune {
+            id: old_id.to_string(),
+        });
     }
     let old_key = StorageKey::lesson(ctx, &loaded.status_dir, old_id);
     let mut fm = loaded.frontmatter.clone();
@@ -474,8 +483,8 @@ pub async fn capture_feedback(
             .map_err(|e| EngineError::Parse(format!("non-utf8 lesson bytes for {key}: {e}")))?;
         let split = split_frontmatter_normalized(content)
             .map_err(|e| EngineError::Parse(format!("split frontmatter {key}: {e}")))?;
-        let mut fm = parse_lesson_frontmatter(&split.yaml)
-            .map_err(|e| EngineError::Yaml(e.into()))?;
+        let mut fm =
+            parse_lesson_frontmatter(&split.yaml).map_err(|e| EngineError::Yaml(e.into()))?;
         match polarity {
             FeedbackPolarity::ThumbsUp => fm.thumbs_up_count = fm.thumbs_up_count.saturating_add(1),
             FeedbackPolarity::ThumbsDown => {
@@ -520,11 +529,11 @@ pub async fn capture_feedback(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::memory::{insert as insert_memory, MemoryId};
     use crate::engine::embedding::MockEmbedder;
-    use crate::engine::vector::HnswVectorIndex;
+    use crate::engine::memory::{insert as insert_memory, MemoryId};
     use crate::engine::storage::MemoryStorage;
     use crate::engine::test_support::TestHarness;
+    use crate::engine::vector::HnswVectorIndex;
     use crate::engine::yaml::{Authorship, CausalNarrative, Confidence, EvidenceRef, GeneratedBy};
     use std::sync::Arc;
 
@@ -562,6 +571,7 @@ mod tests {
             thumbs_up_count: 0,
             thumbs_down_count: 0,
             external_signal_sources: vec![],
+            applied_session_ids: vec![],
             promotion_eligible_at: None,
             superseded_by: None,
             superseded_at: None,
@@ -592,9 +602,16 @@ mod tests {
     async fn discard_moves_file_to_discarded_dir() {
         let h = TestHarness::in_memory();
         seed_lesson_full(&h, "active", "les-disc00001", Authorship::Llm, vec![]).await;
-        let result = discard(&h.ctx, h.storage.as_ref(), "les-disc00001", None, false, now())
-            .await
-            .unwrap();
+        let result = discard(
+            &h.ctx,
+            h.storage.as_ref(),
+            "les-disc00001",
+            None,
+            false,
+            now(),
+        )
+        .await
+        .unwrap();
         assert_eq!(result.status_dir, "discarded");
         assert_eq!(result.frontmatter.status, LessonStatus::Discarded);
         // File moved.
@@ -608,7 +625,15 @@ mod tests {
     async fn discard_user_authored_without_force_refuses() {
         let h = TestHarness::in_memory();
         seed_lesson_full(&h, "active", "les-usrl00001", Authorship::User, vec![]).await;
-        let r = discard(&h.ctx, h.storage.as_ref(), "les-usrl00001", None, false, now()).await;
+        let r = discard(
+            &h.ctx,
+            h.storage.as_ref(),
+            "les-usrl00001",
+            None,
+            false,
+            now(),
+        )
+        .await;
         assert!(matches!(r, Err(EngineError::UserLessonImmune { .. })));
         // Lesson still active.
         let key = StorageKey::lesson(&h.ctx, "active", "les-usrl00001");
@@ -624,9 +649,18 @@ mod tests {
         // user-lesson citation).
         let mid = MemoryId::new("mem-disc0001");
         let emb = MockEmbedder::new(4).with_response(vec![unit_vec(4, 0)]);
-        insert_memory(&h.ctx, storage.as_ref(), &emb, &vidx, mid.clone(), "x", "y", now())
-            .await
-            .unwrap();
+        insert_memory(
+            &h.ctx,
+            storage.as_ref(),
+            &emb,
+            &vidx,
+            mid.clone(),
+            "x",
+            "y",
+            now(),
+        )
+        .await
+        .unwrap();
         crate::engine::memory::increment_citation_count(&h.ctx, storage.as_ref(), &mid)
             .await
             .unwrap();
@@ -636,10 +670,24 @@ mod tests {
             .unwrap();
         assert_eq!(pre.frontmatter.consumed_by_user_lessons, 1);
         // Seed + discard user-authored lesson citing this memory.
-        seed_lesson_full(&h, "active", "les-dec00001", Authorship::User, vec![mid.clone()]).await;
-        discard(&h.ctx, h.storage.as_ref(), "les-dec00001", Some("user-asked".into()), true, now())
-            .await
-            .unwrap();
+        seed_lesson_full(
+            &h,
+            "active",
+            "les-dec00001",
+            Authorship::User,
+            vec![mid.clone()],
+        )
+        .await;
+        discard(
+            &h.ctx,
+            h.storage.as_ref(),
+            "les-dec00001",
+            Some("user-asked".into()),
+            true,
+            now(),
+        )
+        .await
+        .unwrap();
         let post = crate::engine::memory::get_by_id(&h.ctx, storage.as_ref(), &mid)
             .await
             .unwrap()
@@ -657,16 +705,39 @@ mod tests {
         let vidx = HnswVectorIndex::new(4);
         let mid = MemoryId::new("mem-llm00001");
         let emb = MockEmbedder::new(4).with_response(vec![unit_vec(4, 0)]);
-        insert_memory(&h.ctx, storage.as_ref(), &emb, &vidx, mid.clone(), "x", "y", now())
-            .await
-            .unwrap();
+        insert_memory(
+            &h.ctx,
+            storage.as_ref(),
+            &emb,
+            &vidx,
+            mid.clone(),
+            "x",
+            "y",
+            now(),
+        )
+        .await
+        .unwrap();
         crate::engine::memory::increment_citation_count(&h.ctx, storage.as_ref(), &mid)
             .await
             .unwrap();
-        seed_lesson_full(&h, "active", "les-llmd00001", Authorship::Llm, vec![mid.clone()]).await;
-        discard(&h.ctx, h.storage.as_ref(), "les-llmd00001", None, false, now())
-            .await
-            .unwrap();
+        seed_lesson_full(
+            &h,
+            "active",
+            "les-llmd00001",
+            Authorship::Llm,
+            vec![mid.clone()],
+        )
+        .await;
+        discard(
+            &h.ctx,
+            h.storage.as_ref(),
+            "les-llmd00001",
+            None,
+            false,
+            now(),
+        )
+        .await
+        .unwrap();
         let post = crate::engine::memory::get_by_id(&h.ctx, storage.as_ref(), &mid)
             .await
             .unwrap()
@@ -683,13 +754,28 @@ mod tests {
         // succeed (move helper hits the "already exists" path).
         let h = TestHarness::in_memory();
         seed_lesson_full(&h, "active", "les-idem00001", Authorship::Llm, vec![]).await;
-        discard(&h.ctx, h.storage.as_ref(), "les-idem00001", None, false, now())
-            .await
-            .unwrap();
+        discard(
+            &h.ctx,
+            h.storage.as_ref(),
+            "les-idem00001",
+            None,
+            false,
+            now(),
+        )
+        .await
+        .unwrap();
         // Re-seed at "active" (simulating a half-applied transition leftover).
         seed_lesson_full(&h, "active", "les-idem00001", Authorship::Llm, vec![]).await;
         // Now discard again — should succeed via idempotent path.
-        let r = discard(&h.ctx, h.storage.as_ref(), "les-idem00001", None, false, now()).await;
+        let r = discard(
+            &h.ctx,
+            h.storage.as_ref(),
+            "les-idem00001",
+            None,
+            false,
+            now(),
+        )
+        .await;
         assert!(r.is_ok(), "got {r:?}");
     }
 
@@ -697,8 +783,15 @@ mod tests {
     async fn supersede_self_reference_rejected() {
         let h = TestHarness::in_memory();
         seed_lesson_full(&h, "active", "les-self00001", Authorship::Llm, vec![]).await;
-        let r = supersede(&h.ctx, h.storage.as_ref(), "les-self00001", "les-self00001", false, now())
-            .await;
+        let r = supersede(
+            &h.ctx,
+            h.storage.as_ref(),
+            "les-self00001",
+            "les-self00001",
+            false,
+            now(),
+        )
+        .await;
         match r {
             Err(EngineError::LessonSupersedeInvalid {
                 reason: SupersedeBlockReason::SelfReference { .. },
@@ -712,8 +805,15 @@ mod tests {
     async fn supersede_missing_replacement_rejected() {
         let h = TestHarness::in_memory();
         seed_lesson_full(&h, "active", "les-orig00001", Authorship::Llm, vec![]).await;
-        let r = supersede(&h.ctx, h.storage.as_ref(), "les-orig00001", "les-nope00001", false, now())
-            .await;
+        let r = supersede(
+            &h.ctx,
+            h.storage.as_ref(),
+            "les-orig00001",
+            "les-nope00001",
+            false,
+            now(),
+        )
+        .await;
         match r {
             Err(EngineError::LessonSupersedeInvalid {
                 reason: SupersedeBlockReason::ReplacementNotFound { .. },
@@ -743,6 +843,7 @@ mod tests {
             thumbs_up_count: 0,
             thumbs_down_count: 0,
             external_signal_sources: vec![],
+            applied_session_ids: vec![],
             promotion_eligible_at: None,
             superseded_by: Some("les-A0000001".into()),
             superseded_at: Some("2026-05-13T00:00:00Z".into()),
@@ -752,9 +853,19 @@ mod tests {
         };
         let yaml = serialize_lesson_frontmatter(&fm);
         let key = StorageKey::lesson(&h.ctx, "superseded", "les-B0000001");
-        h.storage.put(&key, Bytes::from(combine_frontmatter(&yaml, "body\n"))).await.unwrap();
-        let r = supersede(&h.ctx, h.storage.as_ref(), "les-A0000001", "les-B0000001", false, now())
-            .await;
+        h.storage
+            .put(&key, Bytes::from(combine_frontmatter(&yaml, "body\n")))
+            .await
+            .unwrap();
+        let r = supersede(
+            &h.ctx,
+            h.storage.as_ref(),
+            "les-A0000001",
+            "les-B0000001",
+            false,
+            now(),
+        )
+        .await;
         match r {
             Err(EngineError::LessonSupersedeInvalid {
                 reason: SupersedeBlockReason::CycleDetected { .. },
@@ -769,7 +880,15 @@ mod tests {
         let h = TestHarness::in_memory();
         seed_lesson_full(&h, "active", "les-suusr0001", Authorship::User, vec![]).await;
         seed_lesson_full(&h, "active", "les-sunew0001", Authorship::Llm, vec![]).await;
-        let r = supersede(&h.ctx, h.storage.as_ref(), "les-suusr0001", "les-sunew0001", false, now()).await;
+        let r = supersede(
+            &h.ctx,
+            h.storage.as_ref(),
+            "les-suusr0001",
+            "les-sunew0001",
+            false,
+            now(),
+        )
+        .await;
         assert!(matches!(r, Err(EngineError::UserLessonImmune { .. })));
     }
 
@@ -783,9 +902,18 @@ mod tests {
         let vidx = HnswVectorIndex::new(4);
         let mid = MemoryId::new("mem-sudec0001");
         let emb = MockEmbedder::new(4).with_response(vec![unit_vec(4, 0)]);
-        insert_memory(&h.ctx, storage.as_ref(), &emb, &vidx, mid.clone(), "x", "y", now())
-            .await
-            .unwrap();
+        insert_memory(
+            &h.ctx,
+            storage.as_ref(),
+            &emb,
+            &vidx,
+            mid.clone(),
+            "x",
+            "y",
+            now(),
+        )
+        .await
+        .unwrap();
         crate::engine::memory::increment_citation_count(&h.ctx, storage.as_ref(), &mid)
             .await
             .unwrap();
@@ -794,11 +922,25 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(pre.frontmatter.consumed_by_user_lessons, 1);
-        seed_lesson_full(&h, "active", "les-suold0001", Authorship::User, vec![mid.clone()]).await;
+        seed_lesson_full(
+            &h,
+            "active",
+            "les-suold0001",
+            Authorship::User,
+            vec![mid.clone()],
+        )
+        .await;
         seed_lesson_full(&h, "active", "les-sunew0002", Authorship::Llm, vec![]).await;
-        supersede(&h.ctx, h.storage.as_ref(), "les-suold0001", "les-sunew0002", true, now())
-            .await
-            .unwrap();
+        supersede(
+            &h.ctx,
+            h.storage.as_ref(),
+            "les-suold0001",
+            "les-sunew0002",
+            true,
+            now(),
+        )
+        .await
+        .unwrap();
         let post = crate::engine::memory::get_by_id(&h.ctx, storage.as_ref(), &mid)
             .await
             .unwrap()
@@ -833,6 +975,7 @@ mod tests {
                 thumbs_up_count: 0,
                 thumbs_down_count: 0,
                 external_signal_sources: vec![],
+                applied_session_ids: vec![],
                 promotion_eligible_at: None,
                 superseded_by: next_id,
                 superseded_at: Some("2026-05-13T00:00:00Z".into()),
@@ -842,10 +985,21 @@ mod tests {
             };
             let yaml = serialize_lesson_frontmatter(&fm);
             let key = StorageKey::lesson(&h.ctx, "superseded", &format!("les-d{:03}", i));
-            h.storage.put(&key, Bytes::from(combine_frontmatter(&yaml, "body\n"))).await.unwrap();
+            h.storage
+                .put(&key, Bytes::from(combine_frontmatter(&yaml, "body\n")))
+                .await
+                .unwrap();
         }
         seed_lesson_full(&h, "active", "les-orig00002", Authorship::Llm, vec![]).await;
-        let r = supersede(&h.ctx, h.storage.as_ref(), "les-orig00002", "les-d000", false, now()).await;
+        let r = supersede(
+            &h.ctx,
+            h.storage.as_ref(),
+            "les-orig00002",
+            "les-d000",
+            false,
+            now(),
+        )
+        .await;
         match r {
             Err(EngineError::LessonSupersedeInvalid {
                 reason: SupersedeBlockReason::CycleDetected { .. },
@@ -860,9 +1014,16 @@ mod tests {
         let h = TestHarness::in_memory();
         seed_lesson_full(&h, "active", "les-old00001", Authorship::Llm, vec![]).await;
         seed_lesson_full(&h, "active", "les-new00001", Authorship::Llm, vec![]).await;
-        let r = supersede(&h.ctx, h.storage.as_ref(), "les-old00001", "les-new00001", false, now())
-            .await
-            .unwrap();
+        let r = supersede(
+            &h.ctx,
+            h.storage.as_ref(),
+            "les-old00001",
+            "les-new00001",
+            false,
+            now(),
+        )
+        .await
+        .unwrap();
         assert_eq!(r.status_dir, "superseded");
         assert_eq!(r.frontmatter.superseded_by.as_deref(), Some("les-new00001"));
         assert!(r.frontmatter.superseded_at.is_some());
@@ -884,8 +1045,14 @@ mod tests {
         .unwrap();
         assert_eq!(r.frontmatter.thumbs_up_count, 1);
         assert_eq!(r.frontmatter.thumbs_down_count, 0);
-        assert!(r.frontmatter.external_signal_sources.iter().any(|s| s == "user_thumbs_up"));
-        assert!(r.body.contains("<!-- feedback: user_thumbs_up by sig-12345"));
+        assert!(r
+            .frontmatter
+            .external_signal_sources
+            .iter()
+            .any(|s| s == "user_thumbs_up"));
+        assert!(r
+            .body
+            .contains("<!-- feedback: user_thumbs_up by sig-12345"));
     }
 
     #[tokio::test]
@@ -894,10 +1061,33 @@ mod tests {
         seed_lesson_full(&h, "active", "les-fb000002", Authorship::Llm, vec![]).await;
         // Call thumbs_up twice — counter goes to 2 but signal list
         // still has exactly one entry.
-        capture_feedback(&h.ctx, h.storage.as_ref(), "les-fb000002", FeedbackPolarity::ThumbsUp, None, now()).await.unwrap();
-        let r = capture_feedback(&h.ctx, h.storage.as_ref(), "les-fb000002", FeedbackPolarity::ThumbsUp, None, now()).await.unwrap();
+        capture_feedback(
+            &h.ctx,
+            h.storage.as_ref(),
+            "les-fb000002",
+            FeedbackPolarity::ThumbsUp,
+            None,
+            now(),
+        )
+        .await
+        .unwrap();
+        let r = capture_feedback(
+            &h.ctx,
+            h.storage.as_ref(),
+            "les-fb000002",
+            FeedbackPolarity::ThumbsUp,
+            None,
+            now(),
+        )
+        .await
+        .unwrap();
         assert_eq!(r.frontmatter.thumbs_up_count, 2);
-        let up_count = r.frontmatter.external_signal_sources.iter().filter(|s| *s == "user_thumbs_up").count();
+        let up_count = r
+            .frontmatter
+            .external_signal_sources
+            .iter()
+            .filter(|s| *s == "user_thumbs_up")
+            .count();
         assert_eq!(up_count, 1);
     }
 
@@ -907,8 +1097,18 @@ mod tests {
         // (missing-causal-narrative is one of the BlockReasons).
         let h = TestHarness::in_memory();
         seed_lesson_full(&h, "active", "les-prom00001", Authorship::Llm, vec![]).await;
-        let r = promote(&h.ctx, h.storage.as_ref(), "les-prom00001", &PromotionConfig::default(), now()).await;
-        assert!(matches!(r, Err(EngineError::PromotionBlocked { .. })), "got {r:?}");
+        let r = promote(
+            &h.ctx,
+            h.storage.as_ref(),
+            "les-prom00001",
+            &PromotionConfig::default(),
+            now(),
+        )
+        .await;
+        assert!(
+            matches!(r, Err(EngineError::PromotionBlocked { .. })),
+            "got {r:?}"
+        );
     }
 
     #[tokio::test]
@@ -932,6 +1132,7 @@ mod tests {
             thumbs_up_count: 0,
             thumbs_down_count: 0,
             external_signal_sources: vec![],
+            applied_session_ids: vec![],
             promotion_eligible_at: None,
             superseded_by: None,
             superseded_at: None,
@@ -940,7 +1141,10 @@ mod tests {
             causal_narrative: None,
         };
         let yaml = serialize_lesson_frontmatter(&other_fm);
-        storage.put(&new_key, Bytes::from(combine_frontmatter(&yaml, "body"))).await.unwrap();
+        storage
+            .put(&new_key, Bytes::from(combine_frontmatter(&yaml, "body")))
+            .await
+            .unwrap();
         // Now try the helper expecting id "les-mv0000001".
         let r = move_lesson_file(
             storage.as_ref(),

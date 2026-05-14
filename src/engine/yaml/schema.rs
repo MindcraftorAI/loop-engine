@@ -165,10 +165,7 @@ impl<'de> Deserialize<'de> for EvidenceRef {
                 A: MapAccess<'de>,
             {
                 let key: String = map.next_key()?.ok_or_else(|| {
-                    A::Error::invalid_length(
-                        0,
-                        &"map with exactly one key (quote|memory)",
-                    )
+                    A::Error::invalid_length(0, &"map with exactly one key (quote|memory)")
                 })?;
                 match key.as_str() {
                     "quote" => {
@@ -318,6 +315,16 @@ pub struct LessonFrontmatter {
     pub thumbs_down_count: u64,
     #[serde(default)]
     pub external_signal_sources: Vec<String>,
+    /// Phase G D-G3 (v0.4): unique session_ids that have applied this
+    /// lesson. Capped at [`MAX_APPLIED_SESSION_IDS`]. Feeds the
+    /// gate's `origin_diverse` signal — a lesson applied across N
+    /// distinct sessions is harder to fake than one applied N times
+    /// in a single session.
+    ///
+    /// Empty for v0.3.x lessons (the field is missing from older
+    /// YAML); the gate degrades gracefully when this is empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub applied_session_ids: Vec<String>,
 
     // Promotion + supersession
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -402,8 +409,7 @@ mod tests {
 
     #[test]
     fn evidence_ref_round_trip_memory() {
-        let original =
-            EvidenceRef::Memory(crate::engine::memory::MemoryId::new("mem-roundtrip"));
+        let original = EvidenceRef::Memory(crate::engine::memory::MemoryId::new("mem-roundtrip"));
         let s = serde_json::to_string(&original).unwrap();
         let back: EvidenceRef = serde_json::from_str(&s).unwrap();
         assert_eq!(original, back);
@@ -435,8 +441,14 @@ generated_at: "2026-05-14T00:00:00Z"
 "#;
         let cn: CausalNarrative = serde_yml::from_str(yaml).unwrap();
         assert_eq!(cn.evidence_refs.len(), 2);
-        assert_eq!(cn.evidence_refs[0], EvidenceRef::Quote("first quote".into()));
-        assert_eq!(cn.evidence_refs[1], EvidenceRef::Quote("second quote".into()));
+        assert_eq!(
+            cn.evidence_refs[0],
+            EvidenceRef::Quote("first quote".into())
+        );
+        assert_eq!(
+            cn.evidence_refs[1],
+            EvidenceRef::Quote("second quote".into())
+        );
     }
 
     #[test]

@@ -109,7 +109,13 @@ async fn find_compressor_of(
 async fn build_predecessor_index(
     ctx: &Context,
     storage: &dyn Storage,
-) -> Result<(HashMap<MemoryId, MemoryId>, std::collections::HashSet<MemoryId>), EngineError> {
+) -> Result<
+    (
+        HashMap<MemoryId, MemoryId>,
+        std::collections::HashSet<MemoryId>,
+    ),
+    EngineError,
+> {
     let prefix = StorageKey::memories_prefix(ctx);
     let keys = storage.list(&prefix).await?;
     let mut map: HashMap<MemoryId, MemoryId> = HashMap::new();
@@ -131,7 +137,8 @@ async fn build_predecessor_index(
             // First-write-wins: ambiguous predecessor (two
             // compressors share a predecessor) keeps the first
             // encountered. Documented as host concern.
-            map.entry(predecessor.clone()).or_insert_with(|| fm.id.clone());
+            map.entry(predecessor.clone())
+                .or_insert_with(|| fm.id.clone());
         }
     }
     Ok((map, all_ids))
@@ -219,17 +226,16 @@ pub async fn recompute_citation_counts(
                     continue;
                 }
             };
-            let split =
-                match crate::engine::yaml::split_frontmatter_normalized(content) {
-                    Ok(s) => s,
-                    Err(e) => {
-                        warn!(
-                            key = %key, error = %e,
-                            "recompute: skipping lesson with bad frontmatter"
-                        );
-                        continue;
-                    }
-                };
+            let split = match crate::engine::yaml::split_frontmatter_normalized(content) {
+                Ok(s) => s,
+                Err(e) => {
+                    warn!(
+                        key = %key, error = %e,
+                        "recompute: skipping lesson with bad frontmatter"
+                    );
+                    continue;
+                }
+            };
             let fm: crate::engine::yaml::LessonFrontmatter =
                 match crate::engine::yaml::reader::parse_lesson_frontmatter(&split.yaml) {
                     Ok(fm) => fm,

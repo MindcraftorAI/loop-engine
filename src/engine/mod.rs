@@ -22,11 +22,11 @@ pub mod manifest;
 pub mod memory;
 pub mod paths;
 pub mod personas;
-pub mod skills;
-pub mod teams;
 pub mod pid;
 pub mod sentiment;
+pub mod skills;
 pub mod storage;
+pub mod teams;
 #[cfg(test)]
 pub mod test_support;
 pub mod vector;
@@ -44,8 +44,8 @@ pub use events::{EngineEvent, EventSource, EventSourceError, HostVersion, Projec
 pub use lessons::{
     capture_feedback as capture_lesson_feedback, check_promotion_gate, discard as discard_lesson,
     generate_narrative, promote as promote_lesson, supersede as supersede_lesson, BlockReason,
-    FeedbackPolarity, GateDecision, NarrativeConfig, NarrativeContext, PassReason,
-    PromotionConfig, SupersedeBlockReason,
+    FeedbackPolarity, GateDecision, NarrativeConfig, NarrativeContext, PassReason, PromotionConfig,
+    SupersedeBlockReason,
 };
 // `MockLlmClient` + `MockEmbedder` are NOT re-exported here — they
 // live behind `#[cfg(any(test, feature = "test-fixtures"))]` and are
@@ -54,9 +54,7 @@ pub use lessons::{
 pub use llm::{
     FinishReason, GenerateRequest, Generation, LlmClient, LlmError, ResponseFormat, TokenUsage,
 };
-pub use manifest::{
-    assemble, ActiveLesson, AssembleConfig, AssemblyStats, Manifest, SessionState,
-};
+pub use manifest::{assemble, ActiveLesson, AssembleConfig, AssemblyStats, Manifest, SessionState};
 // Phase E memory + vector types — surfaces via Manifest and the new
 // `engine::memory` / `engine::vector` modules.
 // CRUD functions are re-exported with `memory_` prefix to avoid
@@ -66,12 +64,11 @@ pub use memory::{
     compress as compress_memories, delete as delete_memory, get_by_id as get_memory_by_id,
     get_by_id_chasing_derived_from as get_memory_by_id_chasing,
     get_by_id_with_embedding as get_memory_by_id_with_embedding,
-    increment_citation_count as increment_memory_citation_count,
-    insert as insert_memory, insert_scoped as insert_memory_scoped, prune as prune_memories,
-    recompute_citation_counts as recompute_memory_citation_counts,
-    search as search_memories, CompressionConfig, CompressionWindow, Memory, MemoryFrontmatter,
-    MemoryId, MemoryQuery, MemoryRef, MemoryScope, MemoryScopeFilter, PrunePredicate,
-    PruneStats, RecomputeStats,
+    increment_citation_count as increment_memory_citation_count, insert as insert_memory,
+    insert_scoped as insert_memory_scoped, prune as prune_memories,
+    recompute_citation_counts as recompute_memory_citation_counts, search as search_memories,
+    CompressionConfig, CompressionWindow, Memory, MemoryFrontmatter, MemoryId, MemoryQuery,
+    MemoryRef, MemoryScope, MemoryScopeFilter, PrunePredicate, PruneStats, RecomputeStats,
 };
 pub use personas::{
     archive as archive_persona, delete as delete_persona, get_by_id as get_persona_by_id,
@@ -81,16 +78,16 @@ pub use personas::{
 pub use skills::{
     archive as archive_skill, delete as delete_skill, get_by_id as get_skill_by_id,
     insert as insert_skill, list as list_skills, update as update_skill, ActivationMode,
-    ContextMode, EffortLevel, HookEvent, HookHandler, HookMatcherGroup, Skill,
-    SkillFrontmatter, SkillRef, SkillStatus, SkillType,
+    ContextMode, EffortLevel, HookEvent, HookHandler, HookMatcherGroup, Skill, SkillFrontmatter,
+    SkillRef, SkillStatus, SkillType,
+};
+pub use storage::{
+    LocalFsStorage, MemoryStorage, Storage, StorageError, StorageKey, StorageMetadata, Version,
 };
 pub use teams::{
     archive as archive_team, delete as delete_team, get_by_id as get_team_by_id,
     insert as insert_team, list as list_teams, update as update_team, Team, TeamFrontmatter,
     TeamMember, TeamRef, TeamStatus,
-};
-pub use storage::{
-    LocalFsStorage, MemoryStorage, Storage, StorageError, StorageKey, StorageMetadata, Version,
 };
 pub use vector::{HnswVectorIndex, SearchHit, VectorIndex, VectorIndexError};
 // `LessonStatus` is a public field of `ActiveLesson` (and `AssembleConfig`

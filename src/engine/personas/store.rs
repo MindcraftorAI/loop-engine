@@ -23,8 +23,8 @@ fn parse_file(bytes: &[u8]) -> Result<(PersonaFrontmatter, String), EngineError>
         .map_err(|e| EngineError::Parse(format!("non-utf8 persona bytes: {e}")))?;
     let split = split_frontmatter_normalized(content)
         .map_err(|e| EngineError::Parse(format!("split frontmatter: {e}")))?;
-    let fm: PersonaFrontmatter = serde_yml::from_str(&split.yaml)
-        .map_err(|e| EngineError::Yaml(Box::new(e)))?;
+    let fm: PersonaFrontmatter =
+        serde_yml::from_str(&split.yaml).map_err(|e| EngineError::Yaml(Box::new(e)))?;
     Ok((fm, split.body))
 }
 
@@ -176,8 +176,19 @@ mod tests {
     async fn insert_then_get_round_trips() {
         let storage: Arc<dyn Storage> = Arc::new(MemoryStorage::default());
         let fm = PersonaFrontmatter::new("pers-aaaa", "Maya", "patient mentor");
-        insert(&ctx(), storage.as_ref(), "pers-aaaa", fm, "voice profile body").await.unwrap();
-        let p = get_by_id(&ctx(), storage.as_ref(), "pers-aaaa").await.unwrap().unwrap();
+        insert(
+            &ctx(),
+            storage.as_ref(),
+            "pers-aaaa",
+            fm,
+            "voice profile body",
+        )
+        .await
+        .unwrap();
+        let p = get_by_id(&ctx(), storage.as_ref(), "pers-aaaa")
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(p.frontmatter.name, "Maya");
         assert_eq!(p.body.trim(), "voice profile body");
     }
@@ -187,7 +198,9 @@ mod tests {
         let storage: Arc<dyn Storage> = Arc::new(MemoryStorage::default());
         let mut fm = PersonaFrontmatter::new("pers-usr1", "User", "");
         fm.authored_by = Authorship::User;
-        insert(&ctx(), storage.as_ref(), "pers-usr1", fm, "").await.unwrap();
+        insert(&ctx(), storage.as_ref(), "pers-usr1", fm, "")
+            .await
+            .unwrap();
         let r = archive(&ctx(), storage.as_ref(), "pers-usr1", false).await;
         assert!(matches!(r, Err(EngineError::UserPersonaImmune { .. })));
     }
@@ -197,8 +210,12 @@ mod tests {
         let storage: Arc<dyn Storage> = Arc::new(MemoryStorage::default());
         let mut fm = PersonaFrontmatter::new("pers-frc1", "User", "");
         fm.authored_by = Authorship::User;
-        insert(&ctx(), storage.as_ref(), "pers-frc1", fm, "").await.unwrap();
-        let p = archive(&ctx(), storage.as_ref(), "pers-frc1", true).await.unwrap();
+        insert(&ctx(), storage.as_ref(), "pers-frc1", fm, "")
+            .await
+            .unwrap();
+        let p = archive(&ctx(), storage.as_ref(), "pers-frc1", true)
+            .await
+            .unwrap();
         assert_eq!(p.frontmatter.status, PersonaStatus::Archived);
     }
 
@@ -206,7 +223,9 @@ mod tests {
     async fn update_mutates_frontmatter_and_body() {
         let storage: Arc<dyn Storage> = Arc::new(MemoryStorage::default());
         let fm = PersonaFrontmatter::new("pers-upd1", "old name", "old desc");
-        insert(&ctx(), storage.as_ref(), "pers-upd1", fm, "old body").await.unwrap();
+        insert(&ctx(), storage.as_ref(), "pers-upd1", fm, "old body")
+            .await
+            .unwrap();
         let r = update(&ctx(), storage.as_ref(), "pers-upd1", |fm, body| {
             fm.name = "new name".into();
             fm.status = PersonaStatus::Active;
@@ -224,11 +243,16 @@ mod tests {
         let storage: Arc<dyn Storage> = Arc::new(MemoryStorage::default());
         let mut fm = PersonaFrontmatter::new("pers-del1", "u", "x");
         fm.authored_by = Authorship::User;
-        insert(&ctx(), storage.as_ref(), "pers-del1", fm, "").await.unwrap();
+        insert(&ctx(), storage.as_ref(), "pers-del1", fm, "")
+            .await
+            .unwrap();
         let r = delete(&ctx(), storage.as_ref(), "pers-del1", false).await;
         assert!(matches!(r, Err(EngineError::UserPersonaImmune { .. })));
         // Persona still present.
-        assert!(get_by_id(&ctx(), storage.as_ref(), "pers-del1").await.unwrap().is_some());
+        assert!(get_by_id(&ctx(), storage.as_ref(), "pers-del1")
+            .await
+            .unwrap()
+            .is_some());
     }
 
     #[tokio::test]
@@ -236,9 +260,16 @@ mod tests {
         let storage: Arc<dyn Storage> = Arc::new(MemoryStorage::default());
         let mut fm = PersonaFrontmatter::new("pers-rmf1", "u", "x");
         fm.authored_by = Authorship::User;
-        insert(&ctx(), storage.as_ref(), "pers-rmf1", fm, "").await.unwrap();
-        delete(&ctx(), storage.as_ref(), "pers-rmf1", true).await.unwrap();
-        assert!(get_by_id(&ctx(), storage.as_ref(), "pers-rmf1").await.unwrap().is_none());
+        insert(&ctx(), storage.as_ref(), "pers-rmf1", fm, "")
+            .await
+            .unwrap();
+        delete(&ctx(), storage.as_ref(), "pers-rmf1", true)
+            .await
+            .unwrap();
+        assert!(get_by_id(&ctx(), storage.as_ref(), "pers-rmf1")
+            .await
+            .unwrap()
+            .is_none());
     }
 
     #[tokio::test]

@@ -14,8 +14,7 @@ use crate::engine::manifest::{ActiveLesson, AssembleConfig};
 use crate::engine::memory::MemoryRef;
 use crate::engine::storage::{Storage, StorageKey};
 use crate::engine::yaml::{
-    reader::parse_lesson_frontmatter, split_frontmatter_normalized, LessonFrontmatter,
-    LessonStatus,
+    reader::parse_lesson_frontmatter, split_frontmatter_normalized, LessonFrontmatter, LessonStatus,
 };
 
 /// Internal: per-lesson record carrying both the public-facing
@@ -46,7 +45,9 @@ pub(super) async fn load_one_record(
         Ok(s) => s,
         Err(e) => {
             warn!(key = %key, error = %e, "manifest: skipping lesson with non-UTF8 bytes");
-            return Err(EngineError::Parse(format!("non-utf8 lesson bytes for {key}")));
+            return Err(EngineError::Parse(format!(
+                "non-utf8 lesson bytes for {key}"
+            )));
         }
     };
     let split = match split_frontmatter_normalized(content) {

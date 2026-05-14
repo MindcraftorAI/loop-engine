@@ -61,6 +61,15 @@ pub struct PromotionConfig {
     /// NTP-drift envelope. The 60x increase still catches malicious
     /// minute-scale-or-bigger backdating.)
     pub tamper_skew_tolerance: Duration,
+    /// Phase G D-G3 (v0.4): minimum number of distinct sessions that
+    /// must have applied this lesson before promotion. Counts
+    /// `LessonFrontmatter::applied_session_ids.len()`. Default `0`
+    /// (gate disabled — pre-Phase-2 lessons have no session data).
+    /// Set to `>=2` to require multi-session reproducibility — the
+    /// `origin_diverse` wedge signal that makes self-grading harder
+    /// (a single agent in one session can pump applied_count without
+    /// touching multiple distinct session_ids).
+    pub min_distinct_origins: u32,
 }
 
 impl Default for PromotionConfig {
@@ -69,8 +78,27 @@ impl Default for PromotionConfig {
             min_age: Duration::hours(24),
             min_applied_count: 3,
             tamper_skew_tolerance: Duration::seconds(60),
+            // Disabled by default — Phase 2 hooks ship the recording
+            // half. Once hosts populate `applied_session_ids` we can
+            // raise the floor (likely 2-3 in v0.5).
+            min_distinct_origins: 0,
         }
     }
+}
+
+/// Phase G D-G3 (v0.4): max distinct session_ids tracked per lesson
+/// in `applied_session_ids`. Cap prevents runaway frontmatter growth
+/// for lessons applied across many sessions; once we hit the cap,
+/// further unique session_ids are silently dropped (gate signal is
+/// "≥cap distinct" which is plenty of evidence).
+pub const MAX_APPLIED_SESSION_IDS: usize = 50;
+
+/// Derived signal: does this lesson have multi-session reproducibility?
+/// Returns true when `applied_session_ids.len() >= 2`. Cheap pure
+/// function so callers (gate, telemetry, CLI inspection) can read
+/// without re-deriving the rule.
+pub fn derive_origin_diverse(fm: &LessonFrontmatter) -> bool {
+    fm.applied_session_ids.len() >= 2
 }
 
 /// Outcome of [`check_promotion_gate`]. Either an enumerated list of
@@ -126,7 +154,9 @@ pub enum BlockReason {
     /// Frontmatter `created_at` is in the future relative to `now`.
     /// Could be clock skew or tampering; either way, promotion is
     /// premature. OQ-B5 per learn-notes D8.
-    FutureCreatedAt { frontmatter_created_at: DateTime<Utc> },
+    FutureCreatedAt {
+        frontmatter_created_at: DateTime<Utc>,
+    },
     /// Lesson hasn't existed long enough per `config.min_age`. The
     /// 24-hour time floor catches "lesson captured and immediately
     /// self-promoted" attacks.
@@ -167,6 +197,13 @@ pub enum BlockReason {
     /// empty. "Observed" without pointers is a self-grading claim,
     /// not evidence — block until refs are attached.
     ObservedConfidenceWithoutEvidenceRefs,
+    /// Phase G D-G3 (v0.4): `applied_session_ids.len()` is below
+    /// `config.min_distinct_origins`. The lesson lacks multi-session
+    /// reproducibility — a self-grading agent in one long session
+    /// could pump `applied_count` without ever touching a second
+    /// session_id. Promotion held until distinct sessions have
+    /// confirmed the lesson reproduces.
+    InsufficientOriginDiversity { observed: u32, required: u32 },
 }
 
 /// `Display` for [`BlockReason`] renders a stable, single-line label
@@ -181,16 +218,24 @@ impl fmt::Display for BlockReason {
             Self::MalformedCreatedAt { value } => {
                 write!(f, "malformed-created-at: {value:?}")
             }
-            Self::FutureCreatedAt { frontmatter_created_at } => {
+            Self::FutureCreatedAt {
+                frontmatter_created_at,
+            } => {
                 write!(f, "future-created-at: {frontmatter_created_at}")
             }
-            Self::TimeFloor { age_seconds, required_seconds } => {
+            Self::TimeFloor {
+                age_seconds,
+                required_seconds,
+            } => {
                 write!(
                     f,
                     "time-floor: age={age_seconds}s < required={required_seconds}s"
                 )
             }
-            Self::TamperedAge { frontmatter_created_at, birthtime } => {
+            Self::TamperedAge {
+                frontmatter_created_at,
+                birthtime,
+            } => {
                 write!(
                     f,
                     "tampered-age: frontmatter_created_at={frontmatter_created_at} \
@@ -214,6 +259,12 @@ impl fmt::Display for BlockReason {
             Self::SpeculativeNarrative => write!(f, "speculative-narrative"),
             Self::ObservedConfidenceWithoutEvidenceRefs => {
                 write!(f, "observed-confidence-without-evidence-refs")
+            }
+            Self::InsufficientOriginDiversity { observed, required } => {
+                write!(
+                    f,
+                    "insufficient-origin-diversity: distinct_sessions={observed} < required={required}"
+                )
             }
         }
     }
@@ -246,6 +297,11 @@ pub enum PassReason {
     /// OR `observed` with non-empty `evidence_refs`. Covers both
     /// branches of the confidence-ladder gate.
     CausalNarrativeOk,
+    /// Phase G D-G3 (v0.4): `applied_session_ids.len() >=
+    /// config.min_distinct_origins`. The lesson reproduces across
+    /// multiple sessions — strong external signal that's hard to
+    /// fake within one agent's run.
+    OriginDiverse,
 }
 
 /// Run the promotion gate.
@@ -346,6 +402,23 @@ pub fn check_promotion_gate(
         passes.push(PassReason::HasExternalSignalSources);
     }
 
+    // 5b. (Phase G D-G3, v0.4) Origin-diversity floor. Disabled by
+    // default (`min_distinct_origins == 0`); when set, requires the
+    // lesson to have applied across N distinct sessions. Recording
+    // half ships in Phase 2 (hooks); until then this stays inert
+    // unless callers explicitly opt-in.
+    if config.min_distinct_origins > 0 {
+        let observed = fm.applied_session_ids.len() as u32;
+        if observed < config.min_distinct_origins {
+            blocks.push(BlockReason::InsufficientOriginDiversity {
+                observed,
+                required: config.min_distinct_origins,
+            });
+        } else {
+            passes.push(PassReason::OriginDiverse);
+        }
+    }
+
     // 6. Causal narrative checks (presence + confidence rules).
     match &fm.causal_narrative {
         None => {
@@ -408,6 +481,7 @@ mod tests {
             thumbs_up_count: 2,
             thumbs_down_count: 0,
             external_signal_sources: vec!["thumbs_up".into()],
+            applied_session_ids: vec![],
             promotion_eligible_at: None,
             superseded_by: None,
             superseded_at: None,
@@ -516,8 +590,12 @@ mod tests {
         match dec {
             GateDecision::Block { reasons } => {
                 // Both FutureCreatedAt and TimeFloor fire (D8 — both surfaces are diagnostic).
-                assert!(reasons.iter().any(|r| matches!(r, BlockReason::FutureCreatedAt { .. })));
-                assert!(reasons.iter().any(|r| matches!(r, BlockReason::TimeFloor { .. })));
+                assert!(reasons
+                    .iter()
+                    .any(|r| matches!(r, BlockReason::FutureCreatedAt { .. })));
+                assert!(reasons
+                    .iter()
+                    .any(|r| matches!(r, BlockReason::TimeFloor { .. })));
             }
             other => panic!("expected block, got {other:?}"),
         }
@@ -532,7 +610,9 @@ mod tests {
         let dec = check_promotion_gate(&fm, &md, &PromotionConfig::default(), now());
         match dec {
             GateDecision::Block { reasons } => {
-                assert!(reasons.iter().any(|r| matches!(r, BlockReason::TimeFloor { .. })));
+                assert!(reasons
+                    .iter()
+                    .any(|r| matches!(r, BlockReason::TimeFloor { .. })));
             }
             other => panic!("expected block, got {other:?}"),
         }
@@ -568,7 +648,9 @@ mod tests {
         let dec = check_promotion_gate(&fm, &md, &PromotionConfig::default(), now());
         match dec {
             GateDecision::Block { reasons } => {
-                assert!(reasons.iter().any(|r| matches!(r, BlockReason::TamperedAge { .. })));
+                assert!(reasons
+                    .iter()
+                    .any(|r| matches!(r, BlockReason::TamperedAge { .. })));
             }
             other => panic!("expected block, got {other:?}"),
         }
@@ -621,10 +703,9 @@ mod tests {
         let dec = check_promotion_gate(&fm, &md, &PromotionConfig::default(), now());
         match dec {
             GateDecision::Block { reasons } => {
-                assert!(reasons.iter().any(|r| matches!(
-                    r,
-                    BlockReason::ThumbsDownBlock { count: 1 }
-                )));
+                assert!(reasons
+                    .iter()
+                    .any(|r| matches!(r, BlockReason::ThumbsDownBlock { count: 1 })));
             }
             other => panic!("expected block, got {other:?}"),
         }
@@ -637,7 +718,10 @@ mod tests {
         fm.thumbs_down_count = 1;
         let md = matching_metadata(&fm);
         let dec = check_promotion_gate(&fm, &md, &PromotionConfig::default(), now());
-        assert!(dec.is_block(), "100 thumbs up does not override 1 thumbs down");
+        assert!(
+            dec.is_block(),
+            "100 thumbs up does not override 1 thumbs down"
+        );
     }
 
     // -----------------------------------------------------------------
@@ -714,9 +798,7 @@ mod tests {
         let mut fm = passing_fm();
         if let Some(cn) = fm.causal_narrative.as_mut() {
             cn.confidence = Confidence::Observed;
-            cn.evidence_refs = vec![EvidenceRef::Quote(
-                "session:abc123#tool_use_1".into(),
-            )];
+            cn.evidence_refs = vec![EvidenceRef::Quote("session:abc123#tool_use_1".into())];
         }
         let md = matching_metadata(&fm);
         let dec = check_promotion_gate(&fm, &md, &PromotionConfig::default(), now());
@@ -749,7 +831,9 @@ mod tests {
         let dec = check_promotion_gate(&fm, &md, &PromotionConfig::default(), now());
         match dec {
             GateDecision::Block { reasons } => {
-                assert!(reasons.iter().any(|r| matches!(r, BlockReason::ThumbsDownBlock { .. })));
+                assert!(reasons
+                    .iter()
+                    .any(|r| matches!(r, BlockReason::ThumbsDownBlock { .. })));
                 assert!(reasons.contains(&BlockReason::MissingCausalNarrative));
                 assert!(reasons.contains(&BlockReason::MissingExternalSignalSources));
             }
@@ -772,7 +856,9 @@ mod tests {
         let dec = check_promotion_gate(&fm, &md, &PromotionConfig::default(), now());
         match dec {
             GateDecision::Block { reasons } => {
-                assert!(reasons.iter().any(|r| matches!(r, BlockReason::MalformedCreatedAt { .. })));
+                assert!(reasons
+                    .iter()
+                    .any(|r| matches!(r, BlockReason::MalformedCreatedAt { .. })));
                 assert!(reasons.contains(&BlockReason::SpeculativeNarrative));
             }
             other => panic!("expected block, got {other:?}"),
@@ -811,7 +897,10 @@ mod tests {
         fm.applied_count = 3;
         let md = matching_metadata(&fm);
         let dec = check_promotion_gate(&fm, &md, &PromotionConfig::default(), now());
-        assert!(dec.is_promote(), "expected promote at exact boundary, got {dec:?}");
+        assert!(
+            dec.is_promote(),
+            "expected promote at exact boundary, got {dec:?}"
+        );
         if let GateDecision::Promote { reasons } = dec {
             assert!(reasons.contains(&PassReason::AppliedCountAboveFloor));
         }
@@ -847,7 +936,10 @@ mod tests {
             ..PromotionConfig::default()
         };
         let dec = check_promotion_gate(&fm, &md, &config, now());
-        assert!(dec.is_promote(), "custom min=1 + applied=1 should promote, got {dec:?}");
+        assert!(
+            dec.is_promote(),
+            "custom min=1 + applied=1 should promote, got {dec:?}"
+        );
     }
 
     // -----------------------------------------------------------------

@@ -30,8 +30,8 @@ use crate::engine::context::Context;
 use crate::engine::embedding::Embedder;
 use crate::engine::error::EngineError;
 use crate::engine::memory::{
-    Memory, MemoryFrontmatter, MemoryId, MemoryQuery, MemoryRef, MemoryScopeFilter,
-    PrunePredicate, PruneStats,
+    Memory, MemoryFrontmatter, MemoryId, MemoryQuery, MemoryRef, MemoryScopeFilter, PrunePredicate,
+    PruneStats,
 };
 use crate::engine::storage::{Storage, StorageKey};
 use crate::engine::vector::{SearchHit, VectorIndex};
@@ -66,22 +66,19 @@ pub(crate) fn render_memory_yaml(
     fm: &MemoryFrontmatter,
     content: &str,
 ) -> Result<String, EngineError> {
-    let yaml = serde_yml::to_string(fm)
-        .map_err(|e| EngineError::Yaml(Box::new(e)))?;
+    let yaml = serde_yml::to_string(fm).map_err(|e| EngineError::Yaml(Box::new(e)))?;
     Ok(combine_frontmatter(yaml.trim(), content))
 }
 
 /// Decode a `memories/<id>.md` file body into a `(MemoryFrontmatter,
 /// String)`. `pub(crate)` for the compression module.
-pub(crate) fn parse_memory_file(
-    bytes: &[u8],
-) -> Result<(MemoryFrontmatter, String), EngineError> {
+pub(crate) fn parse_memory_file(bytes: &[u8]) -> Result<(MemoryFrontmatter, String), EngineError> {
     let content = std::str::from_utf8(bytes)
         .map_err(|e| EngineError::Parse(format!("non-utf8 memory bytes: {e}")))?;
     let split = split_frontmatter_normalized(content)
         .map_err(|e| EngineError::Parse(format!("split frontmatter: {e}")))?;
-    let fm: MemoryFrontmatter = serde_yml::from_str(&split.yaml)
-        .map_err(|e| EngineError::Yaml(Box::new(e)))?;
+    let fm: MemoryFrontmatter =
+        serde_yml::from_str(&split.yaml).map_err(|e| EngineError::Yaml(Box::new(e)))?;
     Ok((fm, split.body))
 }
 
@@ -270,9 +267,7 @@ pub async fn get_by_id_with_embedding(
         return Ok(None);
     };
     let vec_bytes = storage.get(&vec_key(ctx, id)).await?.ok_or_else(|| {
-        EngineError::Parse(format!(
-            "memory {id} present but .vec sidecar missing"
-        ))
+        EngineError::Parse(format!("memory {id} present but .vec sidecar missing"))
     })?;
     let embedding = bytes_to_embedding(&vec_bytes, expected_dims)?;
     mem.embedding = Some(embedding);
@@ -371,11 +366,9 @@ pub async fn update(
         vector_index.insert(ctx, id, embedding).await?;
     }
 
-    Ok(Some(
-        Memory::new(fm, body).with_embedding(
-            embedding_to_persist.unwrap_or_else(|| existing.embedding.unwrap_or_default()),
-        ),
-    ))
+    Ok(Some(Memory::new(fm, body).with_embedding(
+        embedding_to_persist.unwrap_or_else(|| existing.embedding.unwrap_or_default()),
+    )))
 }
 
 /// Statistics returned by [`rehydrate_vector_index`].
@@ -494,9 +487,8 @@ pub async fn search(
     let query_vec: Vec<f32> = match query {
         MemoryQuery::Text(s) => {
             let mut v = embedder.embed(ctx, std::slice::from_ref(s)).await?;
-            v.pop().ok_or_else(|| {
-                EngineError::Parse("embedder returned no vector for query".into())
-            })?
+            v.pop()
+                .ok_or_else(|| EngineError::Parse("embedder returned no vector for query".into()))?
         }
         MemoryQuery::Vector(v) => v.clone(),
     };
@@ -1026,7 +1018,10 @@ mod tests {
         )
         .await
         .unwrap();
-        let loaded = get_by_id(&ctx(), storage.as_ref(), &id).await.unwrap().unwrap();
+        let loaded = get_by_id(&ctx(), storage.as_ref(), &id)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(loaded.frontmatter.id, id);
         assert_eq!(loaded.frontmatter.description, "desc");
         assert_eq!(loaded.content.trim(), "body");
@@ -1077,14 +1072,58 @@ mod tests {
         let a = MemoryId::new("mem-aaaaaaaa");
         let b = MemoryId::new("mem-bbbbbbbb");
         let c = MemoryId::new("mem-cccccccc");
-        insert(&ctx(), storage.as_ref(), &embedder_a, &vector_index, a.clone(), "axis 0", "body a", now).await.unwrap();
-        insert(&ctx(), storage.as_ref(), &embedder_b, &vector_index, b.clone(), "axis 1", "body b", now).await.unwrap();
-        insert(&ctx(), storage.as_ref(), &embedder_c, &vector_index, c.clone(), "axis 2", "body c", now).await.unwrap();
+        insert(
+            &ctx(),
+            storage.as_ref(),
+            &embedder_a,
+            &vector_index,
+            a.clone(),
+            "axis 0",
+            "body a",
+            now,
+        )
+        .await
+        .unwrap();
+        insert(
+            &ctx(),
+            storage.as_ref(),
+            &embedder_b,
+            &vector_index,
+            b.clone(),
+            "axis 1",
+            "body b",
+            now,
+        )
+        .await
+        .unwrap();
+        insert(
+            &ctx(),
+            storage.as_ref(),
+            &embedder_c,
+            &vector_index,
+            c.clone(),
+            "axis 2",
+            "body c",
+            now,
+        )
+        .await
+        .unwrap();
 
         // Search with a pre-computed query vector aligned with axis 0.
         let q = MemoryQuery::Vector(unit_vec(4, 0));
         let embedder_search = MockEmbedder::new(4); // unused for Vector queries
-        let hits = search(&ctx(), storage.as_ref(), &embedder_search, &vector_index, &q, 1, 50, None).await.unwrap();
+        let hits = search(
+            &ctx(),
+            storage.as_ref(),
+            &embedder_search,
+            &vector_index,
+            &q,
+            1,
+            50,
+            None,
+        )
+        .await
+        .unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].id, a);
         assert_eq!(hits[0].description, "axis 0");
@@ -1097,15 +1136,35 @@ mod tests {
         let (storage, embedder, vector_index, now) = fresh_setup().await;
         let embedder = embedder.with_response(vec![unit_vec(4, 0)]);
         let id = MemoryId::new("mem-aaaaaaaa");
-        insert(&ctx(), storage.as_ref(), &embedder, &vector_index, id.clone(), "x", "y", now).await.unwrap();
-        delete(&ctx(), storage.as_ref(), &vector_index, &id, true).await.unwrap();
+        insert(
+            &ctx(),
+            storage.as_ref(),
+            &embedder,
+            &vector_index,
+            id.clone(),
+            "x",
+            "y",
+            now,
+        )
+        .await
+        .unwrap();
+        delete(&ctx(), storage.as_ref(), &vector_index, &id, true)
+            .await
+            .unwrap();
 
         // .md gone.
-        assert!(storage.get(&StorageKey::memory(&ctx(), id.as_str())).await.unwrap().is_none());
+        assert!(storage
+            .get(&StorageKey::memory(&ctx(), id.as_str()))
+            .await
+            .unwrap()
+            .is_none());
         // .vec gone.
         assert!(storage.get(&vec_key(&ctx(), &id)).await.unwrap().is_none());
         // Vector index search no longer returns it.
-        let hits = vector_index.search(&ctx(), &unit_vec(4, 0), 5).await.unwrap();
+        let hits = vector_index
+            .search(&ctx(), &unit_vec(4, 0), 5)
+            .await
+            .unwrap();
         assert!(!hits.iter().any(|h| h.id == id));
     }
 
@@ -1114,15 +1173,32 @@ mod tests {
         let (storage, embedder, vector_index, now) = fresh_setup().await;
         let embedder_a = embedder.with_response(vec![unit_vec(4, 0)]);
         let id = MemoryId::new("mem-prune001");
-        insert(&ctx(), storage.as_ref(), &embedder_a, &vector_index, id.clone(), "p", "p body", now).await.unwrap();
+        insert(
+            &ctx(),
+            storage.as_ref(),
+            &embedder_a,
+            &vector_index,
+            id.clone(),
+            "p",
+            "p body",
+            now,
+        )
+        .await
+        .unwrap();
 
         // Predicate that matches everything.
         let pred: PrunePredicate = Box::new(|_fm| true);
-        let stats = prune(&ctx(), storage.as_ref(), &vector_index, pred).await.unwrap();
+        let stats = prune(&ctx(), storage.as_ref(), &vector_index, pred)
+            .await
+            .unwrap();
         assert_eq!(stats.examined, 1);
         assert_eq!(stats.pruned, 1);
         assert_eq!(stats.skipped_user_immune, 0);
-        assert!(storage.get(&StorageKey::memory(&ctx(), id.as_str())).await.unwrap().is_none());
+        assert!(storage
+            .get(&StorageKey::memory(&ctx(), id.as_str()))
+            .await
+            .unwrap()
+            .is_none());
     }
 
     #[tokio::test]
@@ -1131,20 +1207,42 @@ mod tests {
         let (storage, embedder, vector_index, now) = fresh_setup().await;
         let embedder = embedder.with_response(vec![unit_vec(4, 0)]);
         let id = MemoryId::new("mem-immune01");
-        insert(&ctx(), storage.as_ref(), &embedder, &vector_index, id.clone(), "user-cited", "body", now).await.unwrap();
+        insert(
+            &ctx(),
+            storage.as_ref(),
+            &embedder,
+            &vector_index,
+            id.clone(),
+            "user-cited",
+            "body",
+            now,
+        )
+        .await
+        .unwrap();
         // Simulate a user-authored lesson citing this memory.
-        increment_citation_count(&ctx(), storage.as_ref(), &id).await.unwrap();
-        let loaded = get_by_id(&ctx(), storage.as_ref(), &id).await.unwrap().unwrap();
+        increment_citation_count(&ctx(), storage.as_ref(), &id)
+            .await
+            .unwrap();
+        let loaded = get_by_id(&ctx(), storage.as_ref(), &id)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(loaded.frontmatter.consumed_by_user_lessons, 1);
 
         // Predicate that WOULD match everything.
         let pred: PrunePredicate = Box::new(|_fm| true);
-        let stats = prune(&ctx(), storage.as_ref(), &vector_index, pred).await.unwrap();
+        let stats = prune(&ctx(), storage.as_ref(), &vector_index, pred)
+            .await
+            .unwrap();
         assert_eq!(stats.examined, 1);
         assert_eq!(stats.pruned, 0, "user-immune memory must NOT be pruned");
         assert_eq!(stats.skipped_user_immune, 1, "skip MUST be counted");
         // .md still present.
-        assert!(storage.get(&StorageKey::memory(&ctx(), id.as_str())).await.unwrap().is_some());
+        assert!(storage
+            .get(&StorageKey::memory(&ctx(), id.as_str()))
+            .await
+            .unwrap()
+            .is_some());
     }
 
     #[tokio::test]
@@ -1152,12 +1250,28 @@ mod tests {
         let (storage, embedder, vector_index, now) = fresh_setup().await;
         let embedder = embedder.with_response(vec![unit_vec(4, 0)]);
         let id = MemoryId::new("mem-counter1");
-        insert(&ctx(), storage.as_ref(), &embedder, &vector_index, id.clone(), "x", "y", now).await.unwrap();
+        insert(
+            &ctx(),
+            storage.as_ref(),
+            &embedder,
+            &vector_index,
+            id.clone(),
+            "x",
+            "y",
+            now,
+        )
+        .await
+        .unwrap();
         // 3 increments should land 3.
         for _ in 0..3 {
-            increment_citation_count(&ctx(), storage.as_ref(), &id).await.unwrap();
+            increment_citation_count(&ctx(), storage.as_ref(), &id)
+                .await
+                .unwrap();
         }
-        let loaded = get_by_id(&ctx(), storage.as_ref(), &id).await.unwrap().unwrap();
+        let loaded = get_by_id(&ctx(), storage.as_ref(), &id)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(loaded.frontmatter.consumed_by_user_lessons, 3);
     }
 
@@ -1165,12 +1279,8 @@ mod tests {
     async fn increment_citation_count_on_missing_memory_is_noop() {
         let (storage, _, _, _) = fresh_setup().await;
         // No insert — just increment on a non-existent id.
-        let r = increment_citation_count(
-            &ctx(),
-            storage.as_ref(),
-            &MemoryId::new("mem-noexist1"),
-        )
-        .await;
+        let r = increment_citation_count(&ctx(), storage.as_ref(), &MemoryId::new("mem-noexist1"))
+            .await;
         assert!(r.is_ok(), "increment on missing must be a no-op");
     }
 
@@ -1179,16 +1289,37 @@ mod tests {
         let (storage, embedder, vector_index, now) = fresh_setup().await;
         let embedder = embedder.with_response(vec![unit_vec(4, 0)]);
         let id = MemoryId::new("mem-decrmnt1");
-        insert(&ctx(), storage.as_ref(), &embedder, &vector_index, id.clone(), "x", "y", now).await.unwrap();
+        insert(
+            &ctx(),
+            storage.as_ref(),
+            &embedder,
+            &vector_index,
+            id.clone(),
+            "x",
+            "y",
+            now,
+        )
+        .await
+        .unwrap();
         // Increment twice, decrement five times.
         for _ in 0..2 {
-            increment_citation_count(&ctx(), storage.as_ref(), &id).await.unwrap();
+            increment_citation_count(&ctx(), storage.as_ref(), &id)
+                .await
+                .unwrap();
         }
         for _ in 0..5 {
-            decrement_citation_count(&ctx(), storage.as_ref(), &id).await.unwrap();
+            decrement_citation_count(&ctx(), storage.as_ref(), &id)
+                .await
+                .unwrap();
         }
-        let loaded = get_by_id(&ctx(), storage.as_ref(), &id).await.unwrap().unwrap();
-        assert_eq!(loaded.frontmatter.consumed_by_user_lessons, 0, "saturate at 0");
+        let loaded = get_by_id(&ctx(), storage.as_ref(), &id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            loaded.frontmatter.consumed_by_user_lessons, 0,
+            "saturate at 0"
+        );
     }
 
     #[tokio::test]
@@ -1198,19 +1329,36 @@ mod tests {
         let (storage, embedder, vector_index, now) = fresh_setup().await;
         let embedder = embedder.with_response(vec![unit_vec(4, 0)]);
         let id = MemoryId::new("mem-immunedl");
-        insert(&ctx(), storage.as_ref(), &embedder, &vector_index, id.clone(), "x", "y", now).await.unwrap();
-        increment_citation_count(&ctx(), storage.as_ref(), &id).await.unwrap();
+        insert(
+            &ctx(),
+            storage.as_ref(),
+            &embedder,
+            &vector_index,
+            id.clone(),
+            "x",
+            "y",
+            now,
+        )
+        .await
+        .unwrap();
+        increment_citation_count(&ctx(), storage.as_ref(), &id)
+            .await
+            .unwrap();
         let r = delete(&ctx(), storage.as_ref(), &vector_index, &id, false).await;
         match r {
-            Err(EngineError::UserMemoryImmune { id: ref returned_id, cited_by: 1 }) => {
+            Err(EngineError::UserMemoryImmune {
+                id: ref returned_id,
+                cited_by: 1,
+            }) => {
                 assert_eq!(returned_id, "mem-immunedl");
             }
             other => panic!("expected UserMemoryImmune, got {other:?}"),
         }
         // Memory still in storage.
-        assert!(
-            get_by_id(&ctx(), storage.as_ref(), &id).await.unwrap().is_some()
-        );
+        assert!(get_by_id(&ctx(), storage.as_ref(), &id)
+            .await
+            .unwrap()
+            .is_some());
     }
 
     #[tokio::test]
@@ -1219,10 +1367,28 @@ mod tests {
         let (storage, embedder, vector_index, now) = fresh_setup().await;
         let embedder = embedder.with_response(vec![unit_vec(4, 0)]);
         let id = MemoryId::new("mem-forcedel");
-        insert(&ctx(), storage.as_ref(), &embedder, &vector_index, id.clone(), "x", "y", now).await.unwrap();
-        increment_citation_count(&ctx(), storage.as_ref(), &id).await.unwrap();
-        delete(&ctx(), storage.as_ref(), &vector_index, &id, true).await.unwrap();
-        assert!(get_by_id(&ctx(), storage.as_ref(), &id).await.unwrap().is_none());
+        insert(
+            &ctx(),
+            storage.as_ref(),
+            &embedder,
+            &vector_index,
+            id.clone(),
+            "x",
+            "y",
+            now,
+        )
+        .await
+        .unwrap();
+        increment_citation_count(&ctx(), storage.as_ref(), &id)
+            .await
+            .unwrap();
+        delete(&ctx(), storage.as_ref(), &vector_index, &id, true)
+            .await
+            .unwrap();
+        assert!(get_by_id(&ctx(), storage.as_ref(), &id)
+            .await
+            .unwrap()
+            .is_none());
     }
 
     #[tokio::test]
@@ -1231,17 +1397,37 @@ mod tests {
         let (storage, embedder, vector_index, now) = fresh_setup().await;
         let embedder = embedder.with_response(vec![unit_vec(4, 0)]);
         let id = MemoryId::new("mem-uncited3");
-        insert(&ctx(), storage.as_ref(), &embedder, &vector_index, id.clone(), "x", "y", now).await.unwrap();
-        delete(&ctx(), storage.as_ref(), &vector_index, &id, false).await.unwrap();
-        assert!(get_by_id(&ctx(), storage.as_ref(), &id).await.unwrap().is_none());
+        insert(
+            &ctx(),
+            storage.as_ref(),
+            &embedder,
+            &vector_index,
+            id.clone(),
+            "x",
+            "y",
+            now,
+        )
+        .await
+        .unwrap();
+        delete(&ctx(), storage.as_ref(), &vector_index, &id, false)
+            .await
+            .unwrap();
+        assert!(get_by_id(&ctx(), storage.as_ref(), &id)
+            .await
+            .unwrap()
+            .is_none());
     }
 
     #[tokio::test]
     async fn delete_idempotent_for_absent_id_regardless_of_force() {
         let (storage, _, vector_index, _) = fresh_setup().await;
         let absent = MemoryId::new("mem-noexist1");
-        delete(&ctx(), storage.as_ref(), &vector_index, &absent, false).await.unwrap();
-        delete(&ctx(), storage.as_ref(), &vector_index, &absent, true).await.unwrap();
+        delete(&ctx(), storage.as_ref(), &vector_index, &absent, false)
+            .await
+            .unwrap();
+        delete(&ctx(), storage.as_ref(), &vector_index, &absent, true)
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
@@ -1251,20 +1437,43 @@ mod tests {
         let (storage, embedder, vector_index, now) = fresh_setup().await;
         let embedder = embedder.with_response(vec![unit_vec(4, 0)]);
         let id = MemoryId::new("mem-drift01");
-        insert(&ctx(), storage.as_ref(), &embedder, &vector_index, id.clone(), "x", "y", now).await.unwrap();
+        insert(
+            &ctx(),
+            storage.as_ref(),
+            &embedder,
+            &vector_index,
+            id.clone(),
+            "x",
+            "y",
+            now,
+        )
+        .await
+        .unwrap();
         // Artificially inflate the counter without a citing lesson.
-        increment_citation_count(&ctx(), storage.as_ref(), &id).await.unwrap();
-        increment_citation_count(&ctx(), storage.as_ref(), &id).await.unwrap();
-        let before = get_by_id(&ctx(), storage.as_ref(), &id).await.unwrap().unwrap();
+        increment_citation_count(&ctx(), storage.as_ref(), &id)
+            .await
+            .unwrap();
+        increment_citation_count(&ctx(), storage.as_ref(), &id)
+            .await
+            .unwrap();
+        let before = get_by_id(&ctx(), storage.as_ref(), &id)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(before.frontmatter.consumed_by_user_lessons, 2);
 
-        let stats = recompute_citation_counts(&ctx(), storage.as_ref()).await.unwrap();
+        let stats = recompute_citation_counts(&ctx(), storage.as_ref())
+            .await
+            .unwrap();
         // No lessons → 0 scanned. 1 memory inspected. 1 counter repaired.
         assert_eq!(stats.lessons_scanned, 0);
         assert_eq!(stats.memories_recomputed, 1);
         assert_eq!(stats.counters_repaired, 1);
         // Counter is now 0.
-        let after = get_by_id(&ctx(), storage.as_ref(), &id).await.unwrap().unwrap();
+        let after = get_by_id(&ctx(), storage.as_ref(), &id)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(after.frontmatter.consumed_by_user_lessons, 0);
     }
 
@@ -1272,7 +1481,9 @@ mod tests {
     async fn recompute_citation_counts_noop_when_state_is_consistent() {
         // Empty storage → zero everything, zero repairs.
         let (storage, _, _, _) = fresh_setup().await;
-        let stats = recompute_citation_counts(&ctx(), storage.as_ref()).await.unwrap();
+        let stats = recompute_citation_counts(&ctx(), storage.as_ref())
+            .await
+            .unwrap();
         assert_eq!(stats.lessons_scanned, 0);
         assert_eq!(stats.memories_recomputed, 0);
         assert_eq!(stats.counters_repaired, 0);
@@ -1283,8 +1494,21 @@ mod tests {
         let (storage, embedder, vector_index, now) = fresh_setup().await;
         let embedder = embedder.with_response(vec![unit_vec(4, 0)]);
         let id = MemoryId::new("mem-chase001");
-        insert(&ctx(), storage.as_ref(), &embedder, &vector_index, id.clone(), "x", "y", now).await.unwrap();
-        let r = get_by_id_chasing_derived_from(&ctx(), storage.as_ref(), &id).await.unwrap();
+        insert(
+            &ctx(),
+            storage.as_ref(),
+            &embedder,
+            &vector_index,
+            id.clone(),
+            "x",
+            "y",
+            now,
+        )
+        .await
+        .unwrap();
+        let r = get_by_id_chasing_derived_from(&ctx(), storage.as_ref(), &id)
+            .await
+            .unwrap();
         assert!(r.is_some());
         assert_eq!(r.unwrap().frontmatter.id, id);
     }
@@ -1298,7 +1522,18 @@ mod tests {
         let (storage, _, vector_index, now) = fresh_setup().await;
         let emb1 = MockEmbedder::new(4).with_response(vec![unit_vec(4, 0)]);
         let m1 = MemoryId::new("mem-chase101");
-        insert(&ctx(), storage.as_ref(), &emb1, &vector_index, m1.clone(), "x", "y", now).await.unwrap();
+        insert(
+            &ctx(),
+            storage.as_ref(),
+            &emb1,
+            &vector_index,
+            m1.clone(),
+            "x",
+            "y",
+            now,
+        )
+        .await
+        .unwrap();
         let llm = MockLlmClient::default().with_response(
             Generation::new(r#"{"description":"s","content":"c"}"#)
                 .with_parsed(serde_json::json!({"description":"s","content":"c"})),
@@ -1317,9 +1552,13 @@ mod tests {
         .await
         .unwrap();
         // Force-delete predecessor M1.
-        delete(&ctx(), storage.as_ref(), &vector_index, &m1, true).await.unwrap();
+        delete(&ctx(), storage.as_ref(), &vector_index, &m1, true)
+            .await
+            .unwrap();
         // Chase M1 → should land on Mc.
-        let r = get_by_id_chasing_derived_from(&ctx(), storage.as_ref(), &m1).await.unwrap();
+        let r = get_by_id_chasing_derived_from(&ctx(), storage.as_ref(), &m1)
+            .await
+            .unwrap();
         assert!(r.is_some());
         assert_eq!(r.unwrap().frontmatter.id, mc.frontmatter.id);
     }
@@ -1352,9 +1591,22 @@ mod tests {
         let (storage, _, vector_index, now) = fresh_setup().await;
         let emb1 = MockEmbedder::new(4).with_response(vec![unit_vec(4, 0)]);
         let m1 = MemoryId::new("mem-rcm00001");
-        insert(&ctx(), storage.as_ref(), &emb1, &vector_index, m1.clone(), "x", "y", now).await.unwrap();
+        insert(
+            &ctx(),
+            storage.as_ref(),
+            &emb1,
+            &vector_index,
+            m1.clone(),
+            "x",
+            "y",
+            now,
+        )
+        .await
+        .unwrap();
         // Initial citation count (simulates a user-authored lesson citing M1).
-        increment_citation_count(&ctx(), storage.as_ref(), &m1).await.unwrap();
+        increment_citation_count(&ctx(), storage.as_ref(), &m1)
+            .await
+            .unwrap();
 
         // Compress M1 → Mc. Mc inherits the counter (sum = 1).
         let llm = MockLlmClient::default().with_response(
@@ -1376,16 +1628,26 @@ mod tests {
         .unwrap();
         assert_eq!(mc.frontmatter.consumed_by_user_lessons, 1);
         // Force-delete M1 (user-initiated).
-        delete(&ctx(), storage.as_ref(), &vector_index, &m1, true).await.unwrap();
+        delete(&ctx(), storage.as_ref(), &vector_index, &m1, true)
+            .await
+            .unwrap();
 
         // No lessons exist yet → recompute should zero Mc's counter
         // (no citing lesson is present to credit). This is the
         // baseline: recompute sees zero lessons, zero predecessors
         // exist for any user-authored citation. So Mc.counter
         // becomes 0 after recompute.
-        let stats = recompute_citation_counts(&ctx(), storage.as_ref()).await.unwrap();
-        assert_eq!(stats.counters_repaired, 1, "Mc's counter should drop to 0 (no citing lessons)");
-        let mc_after = get_by_id(&ctx(), storage.as_ref(), &mc.frontmatter.id).await.unwrap().unwrap();
+        let stats = recompute_citation_counts(&ctx(), storage.as_ref())
+            .await
+            .unwrap();
+        assert_eq!(
+            stats.counters_repaired, 1,
+            "Mc's counter should drop to 0 (no citing lessons)"
+        );
+        let mc_after = get_by_id(&ctx(), storage.as_ref(), &mc.frontmatter.id)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(mc_after.frontmatter.consumed_by_user_lessons, 0);
     }
 

@@ -197,9 +197,6 @@ mod tests {
     #[test]
     #[should_panic(expected = "tenant_id is required")]
     fn builder_panics_without_tenant() {
-        let _ = Context::builder()
-            .user_id("u")
-            .session_id("s")
-            .build();
+        let _ = Context::builder().user_id("u").session_id("s").build();
     }
 }

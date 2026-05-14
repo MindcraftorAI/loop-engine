@@ -13,9 +13,9 @@
 #[cfg(any(test, feature = "test-fixtures"))]
 use std::collections::VecDeque;
 #[cfg(any(test, feature = "test-fixtures"))]
-use std::sync::Mutex;
-#[cfg(any(test, feature = "test-fixtures"))]
 use std::sync::atomic::{AtomicUsize, Ordering};
+#[cfg(any(test, feature = "test-fixtures"))]
+use std::sync::Mutex;
 
 use async_trait::async_trait;
 use thiserror::Error;
@@ -161,8 +161,7 @@ impl SentimentClassifier for MockSentimentClassifier {
 mod tests {
     use super::*;
     use crate::engine::sentiment::types::{
-        ClassifierConfidence, Hazard, ItemClassification, LoadedItemId, Polarity,
-        RawClassification,
+        ClassifierConfidence, Hazard, ItemClassification, LoadedItemId, Polarity, RawClassification,
     };
 
     fn empty_request() -> ClassificationRequest {
@@ -211,13 +210,16 @@ mod tests {
 
     #[tokio::test]
     async fn mock_returns_canned_error() {
-        let mock = MockSentimentClassifier::default()
-            .with_error(ClassifierError::RateLimited { retry_after_secs: 5 });
+        let mock = MockSentimentClassifier::default().with_error(ClassifierError::RateLimited {
+            retry_after_secs: 5,
+        });
         let ctx = Context::single_user_local();
         let result = mock.classify(&ctx, &empty_request()).await;
         assert!(matches!(
             result,
-            Err(ClassifierError::RateLimited { retry_after_secs: 5 })
+            Err(ClassifierError::RateLimited {
+                retry_after_secs: 5
+            })
         ));
     }
 

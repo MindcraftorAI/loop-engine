@@ -33,8 +33,13 @@ pub(crate) async fn detect_cycle_in_window(
     predecessors: &[Memory],
 ) -> Result<(), EngineError> {
     for root in predecessors {
-        walk_chain(ctx, storage, &root.frontmatter.id, &root.frontmatter.derived_from)
-            .await?;
+        walk_chain(
+            ctx,
+            storage,
+            &root.frontmatter.id,
+            &root.frontmatter.derived_from,
+        )
+        .await?;
     }
     Ok(())
 }
@@ -154,9 +159,25 @@ mod tests {
         let vi = HnswVectorIndex::new(4);
         let emb = MockEmbedder::new(4).with_response(vec![unit_vec(4, 0)]);
         let id = MemoryId::new("mem-raw00000");
-        insert(&ctx(), storage.as_ref(), &emb, &vi, id.clone(), "x", "y", now_t()).await.unwrap();
-        let mem = get_by_id(&ctx(), storage.as_ref(), &id).await.unwrap().unwrap();
-        assert!(detect_cycle_in_window(&ctx(), storage.as_ref(), &[mem]).await.is_ok());
+        insert(
+            &ctx(),
+            storage.as_ref(),
+            &emb,
+            &vi,
+            id.clone(),
+            "x",
+            "y",
+            now_t(),
+        )
+        .await
+        .unwrap();
+        let mem = get_by_id(&ctx(), storage.as_ref(), &id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(detect_cycle_in_window(&ctx(), storage.as_ref(), &[mem])
+            .await
+            .is_ok());
     }
 
     /// Phase E2 audit C1 regression: diamond DAGs are NOT cycles.
@@ -172,35 +193,66 @@ mod tests {
         // Insert raw1.
         let raw1 = MemoryId::new("mem-dia00001");
         let emb_r = MockEmbedder::new(4).with_response(vec![unit_vec(4, 0)]);
-        insert(&ctx(), storage.as_ref(), &emb_r, &vi, raw1.clone(), "raw1", "raw1 body", now_t()).await.unwrap();
+        insert(
+            &ctx(),
+            storage.as_ref(),
+            &emb_r,
+            &vi,
+            raw1.clone(),
+            "raw1",
+            "raw1 body",
+            now_t(),
+        )
+        .await
+        .unwrap();
 
         // Compress raw1 → Mc1.
         let llm = MockLlmClient::default()
-            .with_response(Generation::new(r#"{"description":"mc1","content":"c1"}"#)
-                .with_parsed(serde_json::json!({"description":"mc1","content":"c1"})))
-            .with_response(Generation::new(r#"{"description":"mc2","content":"c2"}"#)
-                .with_parsed(serde_json::json!({"description":"mc2","content":"c2"})));
+            .with_response(
+                Generation::new(r#"{"description":"mc1","content":"c1"}"#)
+                    .with_parsed(serde_json::json!({"description":"mc1","content":"c1"})),
+            )
+            .with_response(
+                Generation::new(r#"{"description":"mc2","content":"c2"}"#)
+                    .with_parsed(serde_json::json!({"description":"mc2","content":"c2"})),
+            );
         let emb_c1 = MockEmbedder::new(4).with_response(vec![unit_vec(4, 1)]);
         let mc1 = do_compress(
-            &ctx(), storage.as_ref(), &llm, &emb_c1, &vi,
+            &ctx(),
+            storage.as_ref(),
+            &llm,
+            &emb_c1,
+            &vi,
             CompressionWindow::Ids(vec![raw1.clone()]),
-            &CompressionConfig::default(), now_t(),
-        ).await.unwrap();
+            &CompressionConfig::default(),
+            now_t(),
+        )
+        .await
+        .unwrap();
 
         // Compress raw1 (again) → Mc2. (Same raw1; two distinct
         // compressors pointing at it. Diamond when Mcc later
         // compresses both Mc1 + Mc2.)
         let emb_c2 = MockEmbedder::new(4).with_response(vec![unit_vec(4, 2)]);
         let mc2 = do_compress(
-            &ctx(), storage.as_ref(), &llm, &emb_c2, &vi,
+            &ctx(),
+            storage.as_ref(),
+            &llm,
+            &emb_c2,
+            &vi,
             // Slight perturbation in the window so mint_compressed_id
             // produces a different id than mc1.
             CompressionWindow::Ids(vec![raw1.clone()]),
             &CompressionConfig::default(),
             // shift the timestamp slightly to differentiate the id
             now_t() + chrono::Duration::milliseconds(1),
-        ).await.unwrap();
-        assert_ne!(mc1.frontmatter.id, mc2.frontmatter.id, "diamond setup needs distinct compressors");
+        )
+        .await
+        .unwrap();
+        assert_ne!(
+            mc1.frontmatter.id, mc2.frontmatter.id,
+            "diamond setup needs distinct compressors"
+        );
 
         // Now hand-build Mcc with derived_from = [Mc1, Mc2].
         // (We can't compress(Mc1, Mc2) easily because they share raw1

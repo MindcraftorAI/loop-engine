@@ -82,11 +82,7 @@ pub trait VectorIndex: Send + Sync + Debug + sealed::Sealed {
     /// `search` filters out tombstoned ids. Remote backends with
     /// native delete (Qdrant, Pinecone) physically remove. Callers
     /// MUST NOT depend on physical removal.
-    async fn delete(
-        &self,
-        ctx: &Context,
-        id: &MemoryId,
-    ) -> Result<(), VectorIndexError>;
+    async fn delete(&self, ctx: &Context, id: &MemoryId) -> Result<(), VectorIndexError>;
 
     /// Serialize index state to the supplied `Storage`. The local
     /// HNSW impl writes two known keys: `vector_index/hnsw_state.bin`
@@ -94,11 +90,7 @@ pub trait VectorIndex: Send + Sync + Debug + sealed::Sealed {
     /// (algo version, dim, count). Callers SHOULD invoke periodically
     /// (e.g. on shutdown) — engine doesn't auto-persist on every
     /// insert (would be too slow).
-    async fn persist(
-        &self,
-        ctx: &Context,
-        storage: &dyn Storage,
-    ) -> Result<(), VectorIndexError>;
+    async fn persist(&self, ctx: &Context, storage: &dyn Storage) -> Result<(), VectorIndexError>;
 
     /// Vector dimensionality. Must match the [`Embedder::dimensions()`]
     /// of the embedder used to produce vectors for this index.

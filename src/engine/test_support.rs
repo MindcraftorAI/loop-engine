@@ -165,9 +165,7 @@ mod tests {
         // lessons — proves no shared global state (ENV_LOCK-free).
         let a = TestHarness::in_memory();
         let b = TestHarness::in_memory();
-        a.seed_lesson("active", "les-only-in-a", "x")
-            .await
-            .unwrap();
+        a.seed_lesson("active", "les-only-in-a", "x").await.unwrap();
         let key_b = StorageKey::lesson(&b.ctx, "active", "les-only-in-a");
         // b's storage is a separate MemoryStorage — should not have it.
         assert!(b.storage.get(&key_b).await.unwrap().is_none());

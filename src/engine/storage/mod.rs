@@ -89,10 +89,7 @@ pub trait Storage: Send + Sync + Debug + sealed::Sealed {
     /// can determine creation time (FAT32, older Linux kernels, some
     /// network mounts). When `None`, the gate's tamper check abstains
     /// rather than treating the absence as either pass or fail.
-    async fn metadata(
-        &self,
-        key: &StorageKey,
-    ) -> Result<Option<StorageMetadata>, StorageError>;
+    async fn metadata(&self, key: &StorageKey) -> Result<Option<StorageMetadata>, StorageError>;
 }
 
 pub(crate) mod sealed {

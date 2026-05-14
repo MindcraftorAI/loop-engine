@@ -260,12 +260,8 @@ fn process_cursor(
                 });
                 return Ok(());
             }
-            CursorAction::Append { read_bytes } => {
-                (cursor.offset, read_bytes.min(MAX_APPEND_READ))
-            }
-            CursorAction::ReplayFromStart { total_bytes } => {
-                (0, total_bytes.min(MAX_APPEND_READ))
-            }
+            CursorAction::Append { read_bytes } => (cursor.offset, read_bytes.min(MAX_APPEND_READ)),
+            CursorAction::ReplayFromStart { total_bytes } => (0, total_bytes.min(MAX_APPEND_READ)),
         };
 
         let result = cursor.read_appended(from, count)?;

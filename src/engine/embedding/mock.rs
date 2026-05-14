@@ -144,10 +144,7 @@ impl Embedder for MockEmbedder {
         if self.deterministic.load(Ordering::Relaxed) {
             return Ok(texts.iter().map(|t| self.text_to_vector(t)).collect());
         }
-        let mut queue = self
-            .responses
-            .lock()
-            .expect("MockEmbedder mutex poisoned");
+        let mut queue = self.responses.lock().expect("MockEmbedder mutex poisoned");
         if let Some(staged) = queue.pop_front() {
             return staged;
         }
@@ -222,7 +219,10 @@ mod tests {
         let m = MockEmbedder::new(8).with_deterministic();
         let r1 = m.embed(&ctx(), &["alpha".into()]).await.unwrap();
         let r2 = m.embed(&ctx(), &["beta".into()]).await.unwrap();
-        assert_ne!(r1, r2, "distinct texts should not collide (most of the time)");
+        assert_ne!(
+            r1, r2,
+            "distinct texts should not collide (most of the time)"
+        );
     }
 
     #[tokio::test]
@@ -247,7 +247,10 @@ mod tests {
         let r = m.embed(&ctx(), &["x".into()]).await.unwrap();
         let v = &r[0];
         let norm: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
-        assert!((norm - 1.0).abs() < 1e-5, "deterministic should ignore queue");
+        assert!(
+            (norm - 1.0).abs() < 1e-5,
+            "deterministic should ignore queue"
+        );
     }
 
     #[tokio::test]

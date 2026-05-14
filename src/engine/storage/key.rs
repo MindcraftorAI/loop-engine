@@ -160,10 +160,7 @@ fn prefixed(ctx: &Context, suffix: &str) -> String {
     if ctx.tenant_id.as_str() == "local" {
         suffix.to_string()
     } else {
-        format!(
-            "tenants/{}/users/{}/{suffix}",
-            ctx.tenant_id, ctx.user_id
-        )
+        format!("tenants/{}/users/{}/{suffix}", ctx.tenant_id, ctx.user_id)
     }
 }
 

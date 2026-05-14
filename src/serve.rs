@@ -49,7 +49,9 @@ use crate::engine::storage::{Storage, StorageKey};
 use crate::engine::vector::{HnswVectorIndex, VectorIndex};
 use crate::engine::yaml::writer::serialize_lesson_frontmatter;
 use crate::engine::yaml::{combine_frontmatter, split_frontmatter_normalized};
-use crate::engine::yaml::{reader::parse_lesson_frontmatter, Authorship, LessonFrontmatter, LessonStatus};
+use crate::engine::yaml::{
+    reader::parse_lesson_frontmatter, Authorship, LessonFrontmatter, LessonStatus,
+};
 
 // ---- JSON-RPC wire types -------------------------------------------
 
@@ -104,7 +106,12 @@ fn err(id: Option<Value>, code: i32, message: impl Into<String>) -> Response {
     }
 }
 
-fn err_with_data(id: Option<Value>, code: i32, message: impl Into<String>, data: Value) -> Response {
+fn err_with_data(
+    id: Option<Value>,
+    code: i32,
+    message: impl Into<String>,
+    data: Value,
+) -> Response {
     Response {
         jsonrpc: "2.0",
         id,
@@ -155,9 +162,7 @@ pub async fn run() -> Result<()> {
             );
         }
         Err(e) => {
-            eprintln!(
-                "[loop-engine serve] rehydrate failed (continuing with empty index): {e:#}"
-            );
+            eprintln!("[loop-engine serve] rehydrate failed (continuing with empty index): {e:#}");
         }
     }
 
@@ -205,10 +210,23 @@ async fn process_line(
     if req.jsonrpc != "2.0" {
         return err(req.id, -32600, "jsonrpc must be \"2.0\"");
     }
-    match dispatch(&req.method, req.params, ctx, storage, embedder, vector_index).await {
+    match dispatch(
+        &req.method,
+        req.params,
+        ctx,
+        storage,
+        embedder,
+        vector_index,
+    )
+    .await
+    {
         Ok(value) => ok(req.id, value),
-        Err(DispatchError::MethodNotFound) => err(req.id, -32601, format!("method not found: {}", req.method)),
-        Err(DispatchError::InvalidParams(msg)) => err(req.id, -32602, format!("invalid params: {msg}")),
+        Err(DispatchError::MethodNotFound) => {
+            err(req.id, -32601, format!("method not found: {}", req.method))
+        }
+        Err(DispatchError::InvalidParams(msg)) => {
+            err(req.id, -32602, format!("invalid params: {msg}"))
+        }
         Err(DispatchError::PromotionBlocked(reasons)) => err_with_data(
             req.id,
             -32000,
@@ -221,12 +239,9 @@ async fn process_line(
             "user-authored lesson is eviction-immune",
             json!({ "lesson_id": id }),
         ),
-        Err(DispatchError::NotFound(id)) => err_with_data(
-            req.id,
-            -32002,
-            "not found",
-            json!({ "id": id }),
-        ),
+        Err(DispatchError::NotFound(id)) => {
+            err_with_data(req.id, -32002, "not found", json!({ "id": id }))
+        }
         Err(DispatchError::UserMemoryImmune { id, cited_by }) => err_with_data(
             req.id,
             -32003,
@@ -295,10 +310,12 @@ async fn lesson_create(
     ctx: &Context,
     storage: &dyn Storage,
 ) -> std::result::Result<Value, DispatchError> {
-    let p: LessonCreateParams = serde_json::from_value(params)
-        .map_err(|e| DispatchError::InvalidParams(e.to_string()))?;
+    let p: LessonCreateParams =
+        serde_json::from_value(params).map_err(|e| DispatchError::InvalidParams(e.to_string()))?;
     if p.description.trim().is_empty() || p.body.trim().is_empty() {
-        return Err(DispatchError::InvalidParams("description and body required".into()));
+        return Err(DispatchError::InvalidParams(
+            "description and body required".into(),
+        ));
     }
     let authored_by = parse_authorship(p.authored_by.as_deref());
     let id = new_lesson_id();
@@ -317,6 +334,7 @@ async fn lesson_create(
         thumbs_up_count: 0,
         thumbs_down_count: 0,
         external_signal_sources: vec![],
+        applied_session_ids: vec![],
         promotion_eligible_at: None,
         superseded_by: None,
         superseded_at: None,
@@ -357,8 +375,8 @@ async fn lesson_recall(
     ctx: &Context,
     storage: &dyn Storage,
 ) -> std::result::Result<Value, DispatchError> {
-    let p: LessonRecallParams = serde_json::from_value(params)
-        .map_err(|e| DispatchError::InvalidParams(e.to_string()))?;
+    let p: LessonRecallParams =
+        serde_json::from_value(params).map_err(|e| DispatchError::InvalidParams(e.to_string()))?;
     if p.query.trim().is_empty() {
         return Err(DispatchError::InvalidParams("query required".into()));
     }
@@ -434,8 +452,8 @@ async fn lesson_promote(
     ctx: &Context,
     storage: &dyn Storage,
 ) -> std::result::Result<Value, DispatchError> {
-    let p: LessonPromoteParams = serde_json::from_value(params)
-        .map_err(|e| DispatchError::InvalidParams(e.to_string()))?;
+    let p: LessonPromoteParams =
+        serde_json::from_value(params).map_err(|e| DispatchError::InvalidParams(e.to_string()))?;
     // Probe existence first so we surface NotFound cleanly.
     if load_lesson(ctx, storage, &p.id)
         .await
@@ -444,15 +462,7 @@ async fn lesson_promote(
     {
         return Err(DispatchError::NotFound(p.id));
     }
-    match promote(
-        ctx,
-        storage,
-        &p.id,
-        &PromotionConfig::default(),
-        Utc::now(),
-    )
-    .await
-    {
+    match promote(ctx, storage, &p.id, &PromotionConfig::default(), Utc::now()).await {
         Ok(loaded) => Ok(json!({
             "ok": true,
             "id": p.id,
@@ -482,8 +492,8 @@ async fn lesson_discard(
     ctx: &Context,
     storage: &dyn Storage,
 ) -> std::result::Result<Value, DispatchError> {
-    let p: LessonDiscardParams = serde_json::from_value(params)
-        .map_err(|e| DispatchError::InvalidParams(e.to_string()))?;
+    let p: LessonDiscardParams =
+        serde_json::from_value(params).map_err(|e| DispatchError::InvalidParams(e.to_string()))?;
     match discard(ctx, storage, &p.id, p.reason.clone(), p.force, Utc::now()).await {
         Ok(loaded) => Ok(json!({
             "ok": true,
@@ -615,8 +625,8 @@ async fn memory_create(
     embedder: &dyn Embedder,
     vector_index: &dyn VectorIndex,
 ) -> std::result::Result<Value, DispatchError> {
-    let p: MemoryCreateParams = serde_json::from_value(params)
-        .map_err(|e| DispatchError::InvalidParams(e.to_string()))?;
+    let p: MemoryCreateParams =
+        serde_json::from_value(params).map_err(|e| DispatchError::InvalidParams(e.to_string()))?;
     if p.description.trim().is_empty() || p.content.trim().is_empty() {
         return Err(DispatchError::InvalidParams(
             "description and content required".into(),
@@ -717,8 +727,8 @@ async fn memory_search_method(
     embedder: &dyn Embedder,
     vector_index: &dyn VectorIndex,
 ) -> std::result::Result<Value, DispatchError> {
-    let p: MemorySearchParams = serde_json::from_value(params)
-        .map_err(|e| DispatchError::InvalidParams(e.to_string()))?;
+    let p: MemorySearchParams =
+        serde_json::from_value(params).map_err(|e| DispatchError::InvalidParams(e.to_string()))?;
     if p.query.trim().is_empty() {
         return Err(DispatchError::InvalidParams("query required".into()));
     }
@@ -771,8 +781,8 @@ async fn memory_get(
     ctx: &Context,
     storage: &dyn Storage,
 ) -> std::result::Result<Value, DispatchError> {
-    let p: MemoryGetParams = serde_json::from_value(params)
-        .map_err(|e| DispatchError::InvalidParams(e.to_string()))?;
+    let p: MemoryGetParams =
+        serde_json::from_value(params).map_err(|e| DispatchError::InvalidParams(e.to_string()))?;
     if p.id.trim().is_empty() {
         return Err(DispatchError::InvalidParams("id required".into()));
     }
@@ -815,8 +825,8 @@ async fn memory_update_method(
     embedder: &dyn Embedder,
     vector_index: &dyn VectorIndex,
 ) -> std::result::Result<Value, DispatchError> {
-    let p: MemoryUpdateParams = serde_json::from_value(params)
-        .map_err(|e| DispatchError::InvalidParams(e.to_string()))?;
+    let p: MemoryUpdateParams =
+        serde_json::from_value(params).map_err(|e| DispatchError::InvalidParams(e.to_string()))?;
     if p.id.trim().is_empty() {
         return Err(DispatchError::InvalidParams("id required".into()));
     }
@@ -876,8 +886,8 @@ async fn memory_delete_method(
     storage: &dyn Storage,
     vector_index: &dyn VectorIndex,
 ) -> std::result::Result<Value, DispatchError> {
-    let p: MemoryDeleteParams = serde_json::from_value(params)
-        .map_err(|e| DispatchError::InvalidParams(e.to_string()))?;
+    let p: MemoryDeleteParams =
+        serde_json::from_value(params).map_err(|e| DispatchError::InvalidParams(e.to_string()))?;
     if p.id.trim().is_empty() {
         return Err(DispatchError::InvalidParams("id required".into()));
     }
@@ -965,7 +975,10 @@ mod tests {
         let err = w.into_engine().expect_err("unknown kind must error");
         match err {
             DispatchError::InvalidParams(msg) => {
-                assert!(msg.contains("nonsense"), "msg should name the offending kind: {msg}");
+                assert!(
+                    msg.contains("nonsense"),
+                    "msg should name the offending kind: {msg}"
+                );
             }
             other => panic!("expected InvalidParams, got: {other:?}"),
         }
@@ -973,9 +986,7 @@ mod tests {
 
     #[test]
     fn scope_filter_wire_any_of_matches_set() {
-        let w = parse_wire(
-            r#"{"kind":"any_of","scopes":["user",{"project":"loop"}]}"#,
-        );
+        let w = parse_wire(r#"{"kind":"any_of","scopes":["user",{"project":"loop"}]}"#);
         let f = w.into_engine().unwrap();
         assert!(f.matches(&MemoryScope::User));
         assert!(f.matches(&MemoryScope::Project("loop".into())));

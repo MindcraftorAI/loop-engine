@@ -24,9 +24,7 @@ use tracing::info;
 use crate::engine::context::Context;
 use crate::engine::storage::{Storage, StorageKey};
 
-use super::types::{
-    AttributionMethod, CalibratedConfidence, Hazard, LoadedItemId, Polarity,
-};
+use super::types::{AttributionMethod, CalibratedConfidence, Hazard, LoadedItemId, Polarity};
 
 /// A sentiment signal — the orchestrator's per-(item,event) decision to
 /// emit positive/negative feedback for a loaded item.
@@ -60,7 +58,11 @@ pub enum AbstainReason {
     /// Classifier returned empty `per_item` (RawClassification::is_abstain).
     ClassifierAbstained,
     /// Confidence below polarity-asymmetric threshold.
-    BelowThreshold { polarity: Polarity, observed: f32, required: f32 },
+    BelowThreshold {
+        polarity: Polarity,
+        observed: f32,
+        required: f32,
+    },
     /// One of the auto-abstain hazards fired (Sarcasm / AmbiguousReferent /
     /// OutOfDistribution / SelfDirected).
     HazardSet(Hazard),
@@ -137,11 +139,8 @@ impl SignalWriteError {
 /// `lessons::record_sentiment_signal` via `Storage::put_if_version`.
 #[async_trait]
 pub trait SignalWriter: Send + Sync + std::fmt::Debug {
-    async fn record(
-        &self,
-        ctx: &Context,
-        signal: &SentimentSignal,
-    ) -> Result<(), SignalWriteError>;
+    async fn record(&self, ctx: &Context, signal: &SentimentSignal)
+        -> Result<(), SignalWriteError>;
 }
 
 /// `tracing`-backed `SignalWriter`. Writes each signal as an INFO event
@@ -223,11 +222,8 @@ impl SignalWriter for StorageBackedSignalWriter {
         signal: &SentimentSignal,
     ) -> Result<(), SignalWriteError> {
         // === Write 1: standalone audit-trail file (always) ===
-        let standalone_key = StorageKey::sentiment_signal(
-            ctx,
-            ctx.session_id.as_str(),
-            &signal.source_event_uuid,
-        );
+        let standalone_key =
+            StorageKey::sentiment_signal(ctx, ctx.session_id.as_str(), &signal.source_event_uuid);
         let body = render_signal_yaml(signal);
         // Create-only: dedupe-as-success per Phase A OQ-A2 — duplicate
         // event_uuid returns Ok(false), which is fine; we treat the
@@ -347,18 +343,12 @@ impl MockSignalWriter {
     /// Set a one-shot record error. Subsequent calls fail with a clone
     /// of the error until `clear_record_error` is called.
     pub fn with_record_error(self, err: SignalWriteError) -> Self {
-        *self
-            .error
-            .lock()
-            .expect("MockSignalWriter mutex poisoned") = Some(err);
+        *self.error.lock().expect("MockSignalWriter mutex poisoned") = Some(err);
         self
     }
 
     pub fn clear_record_error(&self) {
-        *self
-            .error
-            .lock()
-            .expect("MockSignalWriter mutex poisoned") = None;
+        *self.error.lock().expect("MockSignalWriter mutex poisoned") = None;
     }
 }
 
@@ -489,11 +479,8 @@ mod tests {
         writer.record(&ctx, &signal).await.unwrap();
 
         // Write 1: standalone audit-trail file.
-        let key = StorageKey::sentiment_signal(
-            &ctx,
-            ctx.session_id.as_str(),
-            &signal.source_event_uuid,
-        );
+        let key =
+            StorageKey::sentiment_signal(&ctx, ctx.session_id.as_str(), &signal.source_event_uuid);
         let stored = storage.get(&key).await.unwrap().unwrap();
         let body = std::str::from_utf8(&stored).unwrap();
         assert!(body.contains("item_id: les-quokka-special"));
@@ -503,14 +490,11 @@ mod tests {
         assert!(body.contains("source_event_uuid: evt-1"));
 
         // Write 2: lesson aggregation appended `sentiment_positive`.
-        let lesson = crate::engine::lessons::get_by_id(
-            &ctx,
-            storage.as_ref(),
-            "les-quokka-special",
-        )
-        .await
-        .unwrap()
-        .expect("lesson should still exist");
+        let lesson =
+            crate::engine::lessons::get_by_id(&ctx, storage.as_ref(), "les-quokka-special")
+                .await
+                .unwrap()
+                .expect("lesson should still exist");
         assert_eq!(
             lesson.frontmatter.external_signal_sources,
             vec!["sentiment_positive".to_string()]
@@ -528,14 +512,10 @@ mod tests {
 
         writer.record(&ctx, &signal).await.unwrap();
 
-        let lesson = crate::engine::lessons::get_by_id(
-            &ctx,
-            storage.as_ref(),
-            "les-neg-agg",
-        )
-        .await
-        .unwrap()
-        .unwrap();
+        let lesson = crate::engine::lessons::get_by_id(&ctx, storage.as_ref(), "les-neg-agg")
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(
             lesson.frontmatter.external_signal_sources,
             vec!["sentiment_negative".to_string()]
@@ -553,20 +533,13 @@ mod tests {
 
         writer.record(&ctx, &signal).await.unwrap();
 
-        let key = StorageKey::sentiment_signal(
-            &ctx,
-            ctx.session_id.as_str(),
-            &signal.source_event_uuid,
-        );
+        let key =
+            StorageKey::sentiment_signal(&ctx, ctx.session_id.as_str(), &signal.source_event_uuid);
         assert!(storage.get(&key).await.unwrap().is_some());
-        let lesson = crate::engine::lessons::get_by_id(
-            &ctx,
-            storage.as_ref(),
-            "les-neut-agg",
-        )
-        .await
-        .unwrap()
-        .unwrap();
+        let lesson = crate::engine::lessons::get_by_id(&ctx, storage.as_ref(), "les-neut-agg")
+            .await
+            .unwrap()
+            .unwrap();
         assert!(lesson.frontmatter.external_signal_sources.is_empty());
     }
 
@@ -580,11 +553,8 @@ mod tests {
         let signal = fake_signal("les-nofile99");
         let result = writer.record(&ctx, &signal).await;
         assert!(matches!(result, Err(SignalWriteError::Backend(_))));
-        let key = StorageKey::sentiment_signal(
-            &ctx,
-            ctx.session_id.as_str(),
-            &signal.source_event_uuid,
-        );
+        let key =
+            StorageKey::sentiment_signal(&ctx, ctx.session_id.as_str(), &signal.source_event_uuid);
         assert!(storage.get(&key).await.unwrap().is_some());
     }
 
@@ -607,8 +577,14 @@ mod tests {
     #[test]
     fn attribution_method_display_is_snake_case() {
         use crate::engine::sentiment::types::AttributionMethod;
-        assert_eq!(AttributionMethod::DirectMention.to_string(), "direct_mention");
-        assert_eq!(AttributionMethod::PronounResolved.to_string(), "pronoun_resolved");
+        assert_eq!(
+            AttributionMethod::DirectMention.to_string(),
+            "direct_mention"
+        );
+        assert_eq!(
+            AttributionMethod::PronounResolved.to_string(),
+            "pronoun_resolved"
+        );
         assert_eq!(AttributionMethod::Recency.to_string(), "recency");
         assert_eq!(AttributionMethod::Salience.to_string(), "salience");
     }
@@ -631,11 +607,8 @@ mod tests {
         writer.record(&ctx, &first).await.unwrap();
         writer.record(&ctx, &second).await.unwrap();
 
-        let key = StorageKey::sentiment_signal(
-            &ctx,
-            ctx.session_id.as_str(),
-            &first.source_event_uuid,
-        );
+        let key =
+            StorageKey::sentiment_signal(&ctx, ctx.session_id.as_str(), &first.source_event_uuid);
         let stored = storage.get(&key).await.unwrap().unwrap();
         let body = std::str::from_utf8(&stored).unwrap();
         // First write wins (item les-a, not les-b).

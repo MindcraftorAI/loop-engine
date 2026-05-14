@@ -67,10 +67,7 @@ impl LlmClient for MockLlmClient {
         _request: &GenerateRequest,
     ) -> Result<Generation, LlmError> {
         self.call_count.fetch_add(1, Ordering::Relaxed);
-        let mut queue = self
-            .responses
-            .lock()
-            .expect("MockLlmClient mutex poisoned");
+        let mut queue = self.responses.lock().expect("MockLlmClient mutex poisoned");
         if let Some(staged) = queue.pop_front() {
             return staged;
         }
@@ -149,17 +146,11 @@ mod tests {
             .with_response(g.clone())
             .with_error(LlmError::Timeout)
             .with_response(g.clone());
-        assert_eq!(
-            mock.generate(&ctx(), &req()).await.unwrap().text,
-            "ok"
-        );
+        assert_eq!(mock.generate(&ctx(), &req()).await.unwrap().text, "ok");
         assert!(matches!(
             mock.generate(&ctx(), &req()).await,
             Err(LlmError::Timeout)
         ));
-        assert_eq!(
-            mock.generate(&ctx(), &req()).await.unwrap().text,
-            "ok"
-        );
+        assert_eq!(mock.generate(&ctx(), &req()).await.unwrap().text, "ok");
     }
 }

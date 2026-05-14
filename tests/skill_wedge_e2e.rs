@@ -86,7 +86,9 @@ async fn user_authored_skill_citing_memory_makes_both_immune() {
     let mut fm = SkillFrontmatter::new("formatter", "auto-format on save");
     fm.authored_by = Authorship::User;
     fm.evidence_refs = vec![EvidenceRef::Memory(m1.clone())];
-    insert_skill(&ctx(), storage.as_ref(), "skl-wdg00001", fm, "body").await.unwrap();
+    insert_skill(&ctx(), storage.as_ref(), "skl-wdg00001", fm, "body")
+        .await
+        .unwrap();
 
     // 3. M1.consumed_by_user_lessons MUST have incremented — the
     //    wedge wire-up.
@@ -129,7 +131,9 @@ async fn user_authored_skill_citing_memory_makes_both_immune() {
     let mut fm2 = SkillFrontmatter::new("formatter-2", "another user skill");
     fm2.authored_by = Authorship::User;
     fm2.evidence_refs = vec![EvidenceRef::Memory(m1.clone())];
-    insert_skill(&ctx(), storage.as_ref(), "skl-wdg00002", fm2, "body").await.unwrap();
+    insert_skill(&ctx(), storage.as_ref(), "skl-wdg00002", fm2, "body")
+        .await
+        .unwrap();
     let r = delete_skill(&ctx(), storage.as_ref(), "skl-wdg00002", false).await;
     assert!(matches!(r, Err(EngineError::UserSkillImmune { .. })));
 
@@ -172,7 +176,9 @@ async fn llm_authored_skill_does_not_confer_immunity() {
     let mut fm = SkillFrontmatter::new("llm-skill", "auto-generated");
     fm.evidence_refs = vec![EvidenceRef::Memory(m1.clone())];
     // authored_by = Authorship::Llm (default)
-    insert_skill(&ctx(), storage.as_ref(), "skl-llm00001", fm, "body").await.unwrap();
+    insert_skill(&ctx(), storage.as_ref(), "skl-llm00001", fm, "body")
+        .await
+        .unwrap();
 
     let after = memory_get_by_id(&ctx(), storage.as_ref(), &m1)
         .await
@@ -196,12 +202,10 @@ async fn llm_authored_skill_does_not_confer_immunity() {
     memory::delete(&ctx(), storage.as_ref(), &vector_index, &m1, false)
         .await
         .unwrap();
-    assert!(
-        memory_get_by_id(&ctx(), storage.as_ref(), &m1)
-            .await
-            .unwrap()
-            .is_none()
-    );
+    assert!(memory_get_by_id(&ctx(), storage.as_ref(), &m1)
+        .await
+        .unwrap()
+        .is_none());
 }
 
 /// User-authored skill with NO memory citations — skill itself is
@@ -213,7 +217,9 @@ async fn user_authored_skill_without_citations_still_immune() {
 
     let mut fm = SkillFrontmatter::new("user-skill", "no citations");
     fm.authored_by = Authorship::User;
-    insert_skill(&ctx(), storage.as_ref(), "skl-noref0001", fm, "body").await.unwrap();
+    insert_skill(&ctx(), storage.as_ref(), "skl-noref0001", fm, "body")
+        .await
+        .unwrap();
 
     let r = archive_skill(&ctx(), storage.as_ref(), "skl-noref0001", false).await;
     assert!(matches!(r, Err(EngineError::UserSkillImmune { .. })));

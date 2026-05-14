@@ -19,8 +19,8 @@
 //!      closure (only via `_with_fallback`).
 //!   5. **Abstain** — return `None`.
 
-use std::sync::LazyLock;
 use std::collections::HashSet;
+use std::sync::LazyLock;
 
 use super::types::{
     AttributionConfidence, AttributionMethod, LoadedItem, LoadedItemId, RecentTurn, TurnRole,
@@ -129,9 +129,7 @@ fn pass1_direct_mention(utterance: &str, loaded_items: &[LoadedItem]) -> Option<
 
 static PRONOUNS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
     let mut s = HashSet::new();
-    for p in &[
-        "that", "it", "this", "those", "these", "they",
-    ] {
+    for p in &["that", "it", "this", "those", "these", "they"] {
         s.insert(*p);
     }
     s
@@ -201,7 +199,10 @@ fn recently_referenced_items(
 fn first_word_lowercase(text: &str) -> Option<String> {
     text.split_whitespace()
         .next()
-        .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric()).to_lowercase())
+        .map(|w| {
+            w.trim_matches(|c: char| !c.is_alphanumeric())
+                .to_lowercase()
+        })
         .filter(|w| !w.is_empty())
 }
 
@@ -324,16 +325,11 @@ mod tests {
             "ack",
             &["les-a", "les-b", "les-c"],
         )];
-        let result = attribute_signal_with_fallback(
-            "hmm",
-            &items,
-            &recents,
-            |candidates| {
-                // Stub judge picks the first candidate at high confidence.
-                let pick = &candidates[0];
-                Some((pick.id.clone(), AttributionConfidence::new(0.9)))
-            },
-        )
+        let result = attribute_signal_with_fallback("hmm", &items, &recents, |candidates| {
+            // Stub judge picks the first candidate at high confidence.
+            let pick = &candidates[0];
+            Some((pick.id.clone(), AttributionConfidence::new(0.9)))
+        })
         .unwrap();
         assert_eq!(result.item_id.as_str(), "les-a");
         assert_eq!(result.method, AttributionMethod::Salience);
@@ -352,12 +348,9 @@ mod tests {
             "ack",
             &["les-a", "les-b", "les-c"],
         )];
-        let result = attribute_signal_with_fallback(
-            "hmm",
-            &items,
-            &recents,
-            |candidates| Some((candidates[0].id.clone(), AttributionConfidence::new(0.5))),
-        );
+        let result = attribute_signal_with_fallback("hmm", &items, &recents, |candidates| {
+            Some((candidates[0].id.clone(), AttributionConfidence::new(0.5)))
+        });
         assert!(result.is_none());
     }
 

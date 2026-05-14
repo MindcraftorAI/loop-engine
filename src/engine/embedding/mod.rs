@@ -44,11 +44,8 @@ pub trait Embedder: Send + Sync + Debug + sealed::Sealed {
     /// same length as `texts`; each inner `Vec<f32>` has length
     /// `self.dimensions()`. Adapters that violate either invariant
     /// surface [`EmbeddingError::InvalidOutput`].
-    async fn embed(
-        &self,
-        ctx: &Context,
-        texts: &[String],
-    ) -> Result<Vec<Vec<f32>>, EmbeddingError>;
+    async fn embed(&self, ctx: &Context, texts: &[String])
+        -> Result<Vec<Vec<f32>>, EmbeddingError>;
 
     /// Vector dimensionality. Sync — adapters that need runtime
     /// discovery cache eagerly on first construction (provider HTTP

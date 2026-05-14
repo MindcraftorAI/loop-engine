@@ -131,10 +131,7 @@ mod tests {
 
     #[test]
     fn filter_any_of_matches_set() {
-        let f = MemoryScopeFilter::AnyOf(vec![
-            MemoryScope::Team("a".into()),
-            MemoryScope::Global,
-        ]);
+        let f = MemoryScopeFilter::AnyOf(vec![MemoryScope::Team("a".into()), MemoryScope::Global]);
         assert!(f.matches(&MemoryScope::Team("a".into())));
         assert!(f.matches(&MemoryScope::Global));
         assert!(!f.matches(&MemoryScope::User));

@@ -24,8 +24,8 @@ use loop_engine::engine::context::Context;
 use loop_engine::engine::embedding::MockEmbedder;
 use loop_engine::engine::llm::{Generation, MockLlmClient};
 use loop_engine::engine::memory::{
-    compress, delete, get_by_id, get_by_id_chasing_derived_from, increment_citation_count,
-    insert, recompute_citation_counts, CompressionConfig, CompressionWindow, MemoryId,
+    compress, delete, get_by_id, get_by_id_chasing_derived_from, increment_citation_count, insert,
+    recompute_citation_counts, CompressionConfig, CompressionWindow, MemoryId,
 };
 use loop_engine::engine::storage::{MemoryStorage, Storage, StorageKey};
 use loop_engine::engine::vector::HnswVectorIndex;
@@ -53,11 +53,7 @@ fn success_generation(json_str: &str) -> Generation {
 }
 
 /// Write a user-authored lesson citing `mid` via `EvidenceRef::Memory`.
-async fn write_user_lesson_citing_memory(
-    storage: &dyn Storage,
-    lesson_id: &str,
-    mid: MemoryId,
-) {
+async fn write_user_lesson_citing_memory(storage: &dyn Storage, lesson_id: &str, mid: MemoryId) {
     let fm = LessonFrontmatter {
         id: lesson_id.into(),
         description: "user-authored test lesson".into(),
@@ -79,6 +75,7 @@ async fn write_user_lesson_citing_memory(
         thumbs_up_count: 0,
         thumbs_down_count: 0,
         external_signal_sources: vec![],
+        applied_session_ids: vec![],
         promotion_eligible_at: None,
         superseded_by: None,
         superseded_at: None,
@@ -114,7 +111,9 @@ async fn wedge_citation_chain_survives_compression_and_predecessor_force_delete(
     .unwrap();
 
     // 2. Simulate user-authored lesson citing M1.
-    increment_citation_count(&ctx(), storage.as_ref(), &m1).await.unwrap();
+    increment_citation_count(&ctx(), storage.as_ref(), &m1)
+        .await
+        .unwrap();
     write_user_lesson_citing_memory(storage.as_ref(), "les-wedge001", m1.clone()).await;
 
     // 3. Compress M1 into Mc. Mc inherits the citation count.
@@ -140,9 +139,14 @@ async fn wedge_citation_chain_survives_compression_and_predecessor_force_delete(
     );
 
     // 4. Force-delete M1 (host's post-compression sweep).
-    delete(&ctx(), storage.as_ref(), &vector_index, &m1, true).await.unwrap();
+    delete(&ctx(), storage.as_ref(), &vector_index, &m1, true)
+        .await
+        .unwrap();
     assert!(
-        get_by_id(&ctx(), storage.as_ref(), &m1).await.unwrap().is_none(),
+        get_by_id(&ctx(), storage.as_ref(), &m1)
+            .await
+            .unwrap()
+            .is_none(),
         "M1 should be gone"
     );
 
@@ -162,7 +166,9 @@ async fn wedge_citation_chain_survives_compression_and_predecessor_force_delete(
     //    Mc, so Mc keeps its citation count of 1. M1 isn't a record
     //    anymore so it doesn't get counted (already deleted; the
     //    chase-helper supplies Mc as the canonical id).
-    let stats = recompute_citation_counts(&ctx(), storage.as_ref()).await.unwrap();
+    let stats = recompute_citation_counts(&ctx(), storage.as_ref())
+        .await
+        .unwrap();
     assert_eq!(stats.lessons_scanned, 1);
     let mc_after = get_by_id(&ctx(), storage.as_ref(), &mc.frontmatter.id)
         .await
@@ -203,7 +209,9 @@ async fn recursive_compression_preserves_citation_chain() {
         .await
         .unwrap();
         for _ in 0..citations {
-            increment_citation_count(&ctx(), storage.as_ref(), &id).await.unwrap();
+            increment_citation_count(&ctx(), storage.as_ref(), &id)
+                .await
+                .unwrap();
         }
     }
 
@@ -240,7 +248,10 @@ async fn recursive_compression_preserves_citation_chain() {
         &llm2,
         &emb_c2,
         &vector_index,
-        CompressionWindow::Ids(vec![mc.frontmatter.id.clone(), MemoryId::new("mem-rec00003")]),
+        CompressionWindow::Ids(vec![
+            mc.frontmatter.id.clone(),
+            MemoryId::new("mem-rec00003"),
+        ]),
         &CompressionConfig::default(),
         now(),
     )
@@ -252,14 +263,14 @@ async fn recursive_compression_preserves_citation_chain() {
 
     // Chase from M1 (still alive) — should land on Mcc as the
     // most-recent successor in the chain (M1 → Mc → Mcc).
-    let chased = get_by_id_chasing_derived_from(
-        &ctx(),
-        storage.as_ref(),
-        &MemoryId::new("mem-rec00001"),
-    )
-    .await
-    .unwrap();
-    assert!(chased.is_some(), "chase must traverse two compression levels");
+    let chased =
+        get_by_id_chasing_derived_from(&ctx(), storage.as_ref(), &MemoryId::new("mem-rec00001"))
+            .await
+            .unwrap();
+    assert!(
+        chased.is_some(),
+        "chase must traverse two compression levels"
+    );
     assert_eq!(
         chased.unwrap().frontmatter.id,
         mcc.frontmatter.id,
@@ -321,12 +332,24 @@ async fn compress_dedupes_duplicate_predecessor_ids() {
     let vector_index = HnswVectorIndex::new(4);
     let m1 = MemoryId::new("mem-dedup0001");
     let emb = MockEmbedder::new(4).with_response(vec![unit_vec(4, 0)]);
-    insert(&ctx(), storage.as_ref(), &emb, &vector_index, m1.clone(), "x", "y", now()).await.unwrap();
-    increment_citation_count(&ctx(), storage.as_ref(), &m1).await.unwrap();
+    insert(
+        &ctx(),
+        storage.as_ref(),
+        &emb,
+        &vector_index,
+        m1.clone(),
+        "x",
+        "y",
+        now(),
+    )
+    .await
+    .unwrap();
+    increment_citation_count(&ctx(), storage.as_ref(), &m1)
+        .await
+        .unwrap();
     // Window with M1 listed 3 times.
-    let llm = MockLlmClient::default().with_response(success_generation(
-        r#"{"description":"s","content":"c"}"#,
-    ));
+    let llm = MockLlmClient::default()
+        .with_response(success_generation(r#"{"description":"s","content":"c"}"#));
     let emb_c = MockEmbedder::new(4).with_response(vec![unit_vec(4, 1)]);
     let mc = compress(
         &ctx(),
@@ -340,7 +363,11 @@ async fn compress_dedupes_duplicate_predecessor_ids() {
     )
     .await
     .unwrap();
-    assert_eq!(mc.frontmatter.derived_from.len(), 1, "duplicates must be deduped");
+    assert_eq!(
+        mc.frontmatter.derived_from.len(),
+        1,
+        "duplicates must be deduped"
+    );
     assert_eq!(
         mc.frontmatter.consumed_by_user_lessons, 1,
         "citation transfer must not double-count"
@@ -358,12 +385,24 @@ async fn wedge_recompute_actually_restores_drift_through_compression_chain() {
     let vector_index = HnswVectorIndex::new(4);
     let emb = MockEmbedder::new(4).with_response(vec![unit_vec(4, 0)]);
     let m1 = MemoryId::new("mem-drift1234");
-    insert(&ctx(), storage.as_ref(), &emb, &vector_index, m1.clone(), "x", "y", now()).await.unwrap();
-    increment_citation_count(&ctx(), storage.as_ref(), &m1).await.unwrap();
+    insert(
+        &ctx(),
+        storage.as_ref(),
+        &emb,
+        &vector_index,
+        m1.clone(),
+        "x",
+        "y",
+        now(),
+    )
+    .await
+    .unwrap();
+    increment_citation_count(&ctx(), storage.as_ref(), &m1)
+        .await
+        .unwrap();
     write_user_lesson_citing_memory(storage.as_ref(), "les-drift0001", m1.clone()).await;
-    let llm = MockLlmClient::default().with_response(success_generation(
-        r#"{"description":"s","content":"c"}"#,
-    ));
+    let llm = MockLlmClient::default()
+        .with_response(success_generation(r#"{"description":"s","content":"c"}"#));
     let emb_c = MockEmbedder::new(4).with_response(vec![unit_vec(4, 1)]);
     let mc = compress(
         &ctx(),
@@ -377,7 +416,9 @@ async fn wedge_recompute_actually_restores_drift_through_compression_chain() {
     )
     .await
     .unwrap();
-    delete(&ctx(), storage.as_ref(), &vector_index, &m1, true).await.unwrap();
+    delete(&ctx(), storage.as_ref(), &vector_index, &m1, true)
+        .await
+        .unwrap();
     assert_eq!(mc.frontmatter.consumed_by_user_lessons, 1);
 
     // Inject drift: force Mc.counter to 0 by direct write.
@@ -401,15 +442,26 @@ async fn wedge_recompute_actually_restores_drift_through_compression_chain() {
     storage.put(&mc_key, Bytes::from(drifted)).await.unwrap();
 
     // Verify drift.
-    let pre = get_by_id(&ctx(), storage.as_ref(), &mc.frontmatter.id).await.unwrap().unwrap();
+    let pre = get_by_id(&ctx(), storage.as_ref(), &mc.frontmatter.id)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(pre.frontmatter.consumed_by_user_lessons, 0);
 
     // Recompute: chase walks M1 → Mc, lesson citation credits Mc,
     // counter rewritten back to 1.
-    let stats = recompute_citation_counts(&ctx(), storage.as_ref()).await.unwrap();
-    assert_eq!(stats.counters_repaired, 1, "recompute must REPAIR the drift");
+    let stats = recompute_citation_counts(&ctx(), storage.as_ref())
+        .await
+        .unwrap();
+    assert_eq!(
+        stats.counters_repaired, 1,
+        "recompute must REPAIR the drift"
+    );
     assert_eq!(stats.orphan_citations, 0, "no orphan: chase resolved Mc");
-    let post = get_by_id(&ctx(), storage.as_ref(), &mc.frontmatter.id).await.unwrap().unwrap();
+    let post = get_by_id(&ctx(), storage.as_ref(), &mc.frontmatter.id)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(
         post.frontmatter.consumed_by_user_lessons, 1,
         "recompute must RESTORE the citation through the chain"
@@ -427,7 +479,18 @@ async fn llm_authored_lesson_does_not_confer_immunity_through_compression() {
     let vector_index = HnswVectorIndex::new(4);
     let emb = MockEmbedder::new(4).with_response(vec![unit_vec(4, 0)]);
     let m1 = MemoryId::new("mem-llmlsn001");
-    insert(&ctx(), storage.as_ref(), &emb, &vector_index, m1.clone(), "x", "y", now()).await.unwrap();
+    insert(
+        &ctx(),
+        storage.as_ref(),
+        &emb,
+        &vector_index,
+        m1.clone(),
+        "x",
+        "y",
+        now(),
+    )
+    .await
+    .unwrap();
 
     // Write an LLM-authored lesson citing M1 (the only difference
     // from the user-authored wedge test is `authored_by:
@@ -453,6 +516,7 @@ async fn llm_authored_lesson_does_not_confer_immunity_through_compression() {
         thumbs_up_count: 0,
         thumbs_down_count: 0,
         external_signal_sources: vec![],
+        applied_session_ids: vec![],
         promotion_eligible_at: None,
         superseded_by: None,
         superseded_at: None,
@@ -463,16 +527,24 @@ async fn llm_authored_lesson_does_not_confer_immunity_through_compression() {
     let yaml = serialize_lesson_frontmatter(&fm);
     let content = combine_frontmatter(&yaml, "body\n");
     let key = StorageKey::lesson(&ctx(), "active", "les-llm00001");
-    storage.put(&key, bytes::Bytes::from(content)).await.unwrap();
+    storage
+        .put(&key, bytes::Bytes::from(content))
+        .await
+        .unwrap();
 
     // No `increment_citation_count` — only user-authored lessons
     // should drive immunity, and the recompute walk is what drives
     // that counter from on-disk lesson data.
 
     // Recompute. Should NOT credit M1 (lesson is Llm-authored).
-    let stats = recompute_citation_counts(&ctx(), storage.as_ref()).await.unwrap();
+    let stats = recompute_citation_counts(&ctx(), storage.as_ref())
+        .await
+        .unwrap();
     assert_eq!(stats.lessons_scanned, 1);
-    let m1_after = get_by_id(&ctx(), storage.as_ref(), &m1).await.unwrap().unwrap();
+    let m1_after = get_by_id(&ctx(), storage.as_ref(), &m1)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(
         m1_after.frontmatter.consumed_by_user_lessons, 0,
         "LLM-authored citations MUST NOT drive the immunity counter"
@@ -489,14 +561,34 @@ async fn orphan_citation_surfaces_in_recompute_stats() {
     let vector_index = HnswVectorIndex::new(4);
     let emb = MockEmbedder::new(4).with_response(vec![unit_vec(4, 0)]);
     let m1 = MemoryId::new("mem-orph00001");
-    insert(&ctx(), storage.as_ref(), &emb, &vector_index, m1.clone(), "x", "y", now()).await.unwrap();
-    increment_citation_count(&ctx(), storage.as_ref(), &m1).await.unwrap();
+    insert(
+        &ctx(),
+        storage.as_ref(),
+        &emb,
+        &vector_index,
+        m1.clone(),
+        "x",
+        "y",
+        now(),
+    )
+    .await
+    .unwrap();
+    increment_citation_count(&ctx(), storage.as_ref(), &m1)
+        .await
+        .unwrap();
     write_user_lesson_citing_memory(storage.as_ref(), "les-orph00001", m1.clone()).await;
     // Force-delete M1 WITHOUT compressing it first. Citation chain
     // is now orphaned — the lesson still cites M1, but neither M1
     // nor any successor exists.
-    delete(&ctx(), storage.as_ref(), &vector_index, &m1, true).await.unwrap();
+    delete(&ctx(), storage.as_ref(), &vector_index, &m1, true)
+        .await
+        .unwrap();
 
-    let stats = recompute_citation_counts(&ctx(), storage.as_ref()).await.unwrap();
-    assert_eq!(stats.orphan_citations, 1, "audit C2 — orphan must be counted");
+    let stats = recompute_citation_counts(&ctx(), storage.as_ref())
+        .await
+        .unwrap();
+    assert_eq!(
+        stats.orphan_citations, 1,
+        "audit C2 — orphan must be counted"
+    );
 }

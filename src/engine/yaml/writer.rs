@@ -47,6 +47,11 @@ pub fn serialize_lesson_frontmatter(fm: &LessonFrontmatter) -> String {
         "external_signal_sources",
         &fm.external_signal_sources,
     );
+    // Phase G D-G3 (v0.4): only emit when populated, so v0.3.x lessons
+    // round-trip without acquiring an empty array on first rewrite.
+    if !fm.applied_session_ids.is_empty() {
+        emit_string_array(&mut out, "applied_session_ids", &fm.applied_session_ids);
+    }
 
     // Promotion + supersession
     if let Some(v) = &fm.promotion_eligible_at {
@@ -213,6 +218,7 @@ mod tests {
             thumbs_up_count: 0,
             thumbs_down_count: 0,
             external_signal_sources: vec![],
+            applied_session_ids: vec![],
             promotion_eligible_at: None,
             superseded_by: None,
             superseded_at: None,
@@ -288,7 +294,7 @@ mod tests {
             "superseded_by",
             "superseded_at",
             "ingest_provenance",
-            "authored_by",  // Phase E D-E11 addition
+            "authored_by", // Phase E D-E11 addition
             "updated_at",
         ];
         assert_eq!(top_level_keys, expected);

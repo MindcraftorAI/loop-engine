@@ -109,13 +109,21 @@ pub struct SkillFrontmatter {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub when_to_use: Option<String>,
     /// Claude-parity: argument hint for autocomplete.
-    #[serde(default, rename = "argument-hint", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "argument-hint",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub argument_hint: Option<String>,
     /// Claude-parity: named positional args.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub arguments: Vec<String>,
     /// Claude-parity: tools usable without permission prompts.
-    #[serde(default, rename = "allowed-tools", skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        rename = "allowed-tools",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub allowed_tools: Vec<String>,
     /// Claude-parity: model override.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -224,7 +232,10 @@ mod tests {
 
     #[test]
     fn activation_mode_default_is_user_triggered() {
-        assert!(matches!(ActivationMode::default(), ActivationMode::UserTriggered));
+        assert!(matches!(
+            ActivationMode::default(),
+            ActivationMode::UserTriggered
+        ));
     }
 
     #[test]

@@ -120,9 +120,7 @@ pub enum EngineError {
     /// skill is user-authored (cascades from
     /// `feedback_user_authored_lessons_immune.md` — only the user
     /// can retire a user-authored skill).
-    #[error(
-        "user-skill immune: skill {id} is user-authored — use force=true to bypass"
-    )]
+    #[error("user-skill immune: skill {id} is user-authored — use force=true to bypass")]
     UserSkillImmune { id: String },
 
     /// Phase F: engine-initiated archive/delete refused — user-authored persona.

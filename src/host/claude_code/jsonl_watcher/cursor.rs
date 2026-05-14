@@ -151,11 +151,7 @@ impl FileCursor {
     /// (short read at EOF, or file shrank between classify and read). The
     /// caller must advance `offset` by `actual_read - fragment_len`, NOT
     /// by `limit - fragment_len` (the prior bug consumed phantom bytes).
-    pub fn read_appended(
-        &self,
-        from: u64,
-        limit: u64,
-    ) -> Result<ReadAppendedResult> {
+    pub fn read_appended(&self, from: u64, limit: u64) -> Result<ReadAppendedResult> {
         let mut file =
             File::open(&self.path).with_context(|| format!("open {}", self.path.display()))?;
         file.seek(SeekFrom::Start(from))

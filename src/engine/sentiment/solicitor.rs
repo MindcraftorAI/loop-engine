@@ -230,14 +230,9 @@ mod tests {
     async fn no_lessons_no_candidates() {
         let storage = MemoryStorage::default();
         let ctx = Context::single_user_local();
-        let out = solicit_stale_lessons(
-            &ctx,
-            &storage,
-            &SolicitorConfig::default(),
-            Utc::now(),
-        )
-        .await
-        .unwrap();
+        let out = solicit_stale_lessons(&ctx, &storage, &SolicitorConfig::default(), Utc::now())
+            .await
+            .unwrap();
         assert_eq!(out.scanned_count, 0);
         assert!(out.stale_candidates.is_empty());
     }
@@ -249,11 +244,16 @@ mod tests {
         let now = Utc::now();
         // Created 3 days ago — under the 7-day threshold.
         let created = (now - chrono::Duration::days(3)).to_rfc3339();
-        seed(&storage, &ctx, "les-fresh", &lesson_yaml("les-fresh", &created, &[])).await;
-        let out =
-            solicit_stale_lessons(&ctx, &storage, &SolicitorConfig::default(), now)
-                .await
-                .unwrap();
+        seed(
+            &storage,
+            &ctx,
+            "les-fresh",
+            &lesson_yaml("les-fresh", &created, &[]),
+        )
+        .await;
+        let out = solicit_stale_lessons(&ctx, &storage, &SolicitorConfig::default(), now)
+            .await
+            .unwrap();
         assert_eq!(out.scanned_count, 1);
         assert!(out.stale_candidates.is_empty());
     }
@@ -264,14 +264,22 @@ mod tests {
         let ctx = Context::single_user_local();
         let now = Utc::now();
         let created = (now - chrono::Duration::days(30)).to_rfc3339();
-        seed(&storage, &ctx, "les-stale", &lesson_yaml("les-stale", &created, &[])).await;
-        let out =
-            solicit_stale_lessons(&ctx, &storage, &SolicitorConfig::default(), now)
-                .await
-                .unwrap();
+        seed(
+            &storage,
+            &ctx,
+            "les-stale",
+            &lesson_yaml("les-stale", &created, &[]),
+        )
+        .await;
+        let out = solicit_stale_lessons(&ctx, &storage, &SolicitorConfig::default(), now)
+            .await
+            .unwrap();
         assert_eq!(out.stale_candidates.len(), 1);
         assert_eq!(out.stale_candidates[0].lesson_id, "les-stale");
-        assert_eq!(out.stale_candidates[0].reason, StaleReason::NoSignalsInWindow);
+        assert_eq!(
+            out.stale_candidates[0].reason,
+            StaleReason::NoSignalsInWindow
+        );
         assert!(out.stale_candidates[0].age_days >= 30);
     }
 
@@ -289,10 +297,9 @@ mod tests {
         )
         .await;
         // Default threshold is 1 signal; this lesson has exactly 1 → not stale.
-        let out =
-            solicit_stale_lessons(&ctx, &storage, &SolicitorConfig::default(), now)
-                .await
-                .unwrap();
+        let out = solicit_stale_lessons(&ctx, &storage, &SolicitorConfig::default(), now)
+            .await
+            .unwrap();
         assert!(out.stale_candidates.is_empty());
 
         // Raise threshold to 2 — now the lesson is below-density-stale.
@@ -300,8 +307,9 @@ mod tests {
             min_signals_threshold: 2,
             ..SolicitorConfig::default()
         };
-        let out =
-            solicit_stale_lessons(&ctx, &storage, &config, now).await.unwrap();
+        let out = solicit_stale_lessons(&ctx, &storage, &config, now)
+            .await
+            .unwrap();
         assert_eq!(out.stale_candidates.len(), 1);
         assert_eq!(
             out.stale_candidates[0].reason,
@@ -323,8 +331,9 @@ mod tests {
             max_candidates_per_call: 3,
             ..SolicitorConfig::default()
         };
-        let out =
-            solicit_stale_lessons(&ctx, &storage, &config, now).await.unwrap();
+        let out = solicit_stale_lessons(&ctx, &storage, &config, now)
+            .await
+            .unwrap();
         assert_eq!(out.stale_candidates.len(), 3);
         assert!(out.scanned_count >= 3);
     }
@@ -364,10 +373,9 @@ mod tests {
             .put(&key, Bytes::from_static(b"just body, no frontmatter\n"))
             .await
             .unwrap();
-        let out =
-            solicit_stale_lessons(&ctx, &storage, &SolicitorConfig::default(), Utc::now())
-                .await
-                .unwrap();
+        let out = solicit_stale_lessons(&ctx, &storage, &SolicitorConfig::default(), Utc::now())
+            .await
+            .unwrap();
         assert_eq!(out.scanned_count, 1);
         assert_eq!(out.skipped_count, 1);
         assert!(out.stale_candidates.is_empty());

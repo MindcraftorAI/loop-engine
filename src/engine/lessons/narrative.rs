@@ -23,9 +23,7 @@ use serde_json::{json, Value};
 
 use crate::engine::context::Context;
 use crate::engine::error::EngineError;
-use crate::engine::llm::{
-    GenerateRequest, LlmClient, LlmError, ResponseFormat,
-};
+use crate::engine::llm::{GenerateRequest, LlmClient, LlmError, ResponseFormat};
 use crate::engine::yaml::{CausalNarrative, Confidence, EvidenceRef, GeneratedBy};
 
 /// Inputs the caller assembles for [`generate`]. The engine doesn't
@@ -149,18 +147,15 @@ struct NarrativeDraft {
 /// deserializes. Refusal discrimination is the wedge-trust hinge —
 /// "the model refused" must NEVER be mistaken for "the model gave a
 /// valid narrative."
-fn discriminate_output(
-    parsed: serde_json::Value,
-) -> Result<NarrativeDraft, EngineError> {
+fn discriminate_output(parsed: serde_json::Value) -> Result<NarrativeDraft, EngineError> {
     // Refusal sentinel: presence of `error` is dispositive. Even if
     // the response ALSO contains valid-looking narrative fields, the
     // model self-marked the output as a refusal — respect that signal.
     if parsed.get("error").is_some() {
         return Err(EngineError::NarrativeInsufficientContext);
     }
-    serde_json::from_value::<NarrativeDraft>(parsed).map_err(|e| {
-        EngineError::from(LlmError::InvalidOutput(format!("narrative parse: {e}")))
-    })
+    serde_json::from_value::<NarrativeDraft>(parsed)
+        .map_err(|e| EngineError::from(LlmError::InvalidOutput(format!("narrative parse: {e}"))))
 }
 
 /// Generate a `CausalNarrative` for a lesson. Caller supplies the
@@ -205,7 +200,10 @@ pub async fn generate(
         model: None,
     };
 
-    let generation = llm.generate(ctx, &request).await.map_err(EngineError::from)?;
+    let generation = llm
+        .generate(ctx, &request)
+        .await
+        .map_err(EngineError::from)?;
 
     let parsed = generation.parsed.ok_or_else(|| {
         EngineError::from(LlmError::InvalidOutput(
@@ -572,7 +570,10 @@ mod tests {
             now(),
         )
         .await;
-        assert!(matches!(r, Err(EngineError::Llm(LlmError::InvalidOutput(_)))));
+        assert!(matches!(
+            r,
+            Err(EngineError::Llm(LlmError::InvalidOutput(_)))
+        ));
     }
 
     #[tokio::test]
@@ -594,7 +595,10 @@ mod tests {
             now(),
         )
         .await;
-        assert!(matches!(r, Err(EngineError::Llm(LlmError::InvalidOutput(_)))));
+        assert!(matches!(
+            r,
+            Err(EngineError::Llm(LlmError::InvalidOutput(_)))
+        ));
     }
 
     #[test]
