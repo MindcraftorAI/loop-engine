@@ -12,7 +12,7 @@ pub mod store;
 pub use store::{archive, delete, get_by_id, insert, list, update};
 
 /// Phase F D-F5: lifecycle status — matches skill / lesson patterns.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum PersonaStatus {
@@ -72,7 +72,7 @@ impl Persona {
 }
 
 /// Trimmed manifest view.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct PersonaRef {
     pub id: String,

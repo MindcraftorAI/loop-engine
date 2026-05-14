@@ -9,7 +9,8 @@
 use std::fmt;
 
 use serde::de::{Error as DeError, MapAccess, Visitor};
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::ser::SerializeMap;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::engine::memory::MemoryId;
 
@@ -103,8 +104,7 @@ pub struct CausalNarrative {
 /// **Deserialization**: custom impl accepts both plain strings (legacy
 /// TS-shaped lessons) AND the tagged form. Plain strings wrap as
 /// `Quote(_)`. See [`EvidenceRef`]'s `Deserialize` impl.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum EvidenceRef {
     /// Free-text quote. Legacy form. What Phase D's narrative
@@ -116,6 +116,23 @@ pub enum EvidenceRef {
     /// memory's user-immunity counter when the lesson is
     /// user-authored.
     Memory(MemoryId),
+}
+
+impl Serialize for EvidenceRef {
+    /// Always serialize as a single-key map: `{"quote": "..."}` or
+    /// `{"memory": "mem-..."}`. This matches the custom `Deserialize`
+    /// impl below and ALSO matches what `serde_yml` accepts on the
+    /// reader side — derived externally-tagged enums emit YAML tag
+    /// syntax (`!Memory ...`) instead of a map, which our reader
+    /// rejects. Custom impl avoids the mismatch.
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut map = serializer.serialize_map(Some(1))?;
+        match self {
+            Self::Quote(s) => map.serialize_entry("quote", s)?,
+            Self::Memory(id) => map.serialize_entry("memory", id.as_str())?,
+        }
+        map.end()
+    }
 }
 
 impl<'de> Deserialize<'de> for EvidenceRef {

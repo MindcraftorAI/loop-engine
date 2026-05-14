@@ -123,7 +123,7 @@ pub enum EngineError {
     #[error(
         "user-skill immune: skill {id} is user-authored — use force=true to bypass"
     )]
-    UserSkillImmune { id: String, has_user_lessons: bool },
+    UserSkillImmune { id: String },
 
     /// Phase F: engine-initiated archive/delete refused — user-authored persona.
     #[error("user-persona immune: persona {id} is user-authored — use force=true to bypass")]

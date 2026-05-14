@@ -33,6 +33,14 @@ pub async fn insert(
     frontmatter: TeamFrontmatter,
     body: impl Into<String>,
 ) -> Result<Team, EngineError> {
+    // Phase F audit-fix close A-M2: same id-consistency check as
+    // personas/skills — frontmatter.id must match the storage key.
+    if frontmatter.id != id {
+        return Err(EngineError::Parse(format!(
+            "team id mismatch: storage key {id} vs frontmatter.id {}",
+            frontmatter.id
+        )));
+    }
     let body = body.into();
     let key = StorageKey::team(ctx, id);
     if storage.get(&key).await?.is_some() {
@@ -182,6 +190,52 @@ mod tests {
         insert(&ctx(), storage.as_ref(), "tm-usr00", fm, "").await.unwrap();
         let r = archive(&ctx(), storage.as_ref(), "tm-usr00", false).await;
         assert!(matches!(r, Err(EngineError::UserTeamImmune { .. })));
+    }
+
+    #[tokio::test]
+    async fn update_mutates_members_and_status() {
+        let storage: Arc<dyn Storage> = Arc::new(MemoryStorage::default());
+        let fm = TeamFrontmatter::new("tm-upd00", "Old", "old desc");
+        insert(&ctx(), storage.as_ref(), "tm-upd00", fm, "body").await.unwrap();
+        let r = update(&ctx(), storage.as_ref(), "tm-upd00", |fm, _body| {
+            fm.name = "New".into();
+            fm.status = TeamStatus::Active;
+            fm.members.push(TeamMember::User("u-1".into()));
+        })
+        .await
+        .unwrap();
+        assert_eq!(r.frontmatter.name, "New");
+        assert_eq!(r.frontmatter.status, TeamStatus::Active);
+        assert_eq!(r.frontmatter.members.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn delete_force_false_blocks_user_authored() {
+        let storage: Arc<dyn Storage> = Arc::new(MemoryStorage::default());
+        let mut fm = TeamFrontmatter::new("tm-del00", "u", "x");
+        fm.authored_by = Authorship::User;
+        insert(&ctx(), storage.as_ref(), "tm-del00", fm, "").await.unwrap();
+        let r = delete(&ctx(), storage.as_ref(), "tm-del00", false).await;
+        assert!(matches!(r, Err(EngineError::UserTeamImmune { .. })));
+        assert!(get_by_id(&ctx(), storage.as_ref(), "tm-del00").await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn delete_force_true_removes_user_authored() {
+        let storage: Arc<dyn Storage> = Arc::new(MemoryStorage::default());
+        let mut fm = TeamFrontmatter::new("tm-rmf00", "u", "x");
+        fm.authored_by = Authorship::User;
+        insert(&ctx(), storage.as_ref(), "tm-rmf00", fm, "").await.unwrap();
+        delete(&ctx(), storage.as_ref(), "tm-rmf00", true).await.unwrap();
+        assert!(get_by_id(&ctx(), storage.as_ref(), "tm-rmf00").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn insert_rejects_id_mismatch_between_key_and_frontmatter() {
+        let storage: Arc<dyn Storage> = Arc::new(MemoryStorage::default());
+        let fm = TeamFrontmatter::new("tm-fmid0", "n", "d");
+        let r = insert(&ctx(), storage.as_ref(), "tm-keyid0", fm, "body").await;
+        assert!(matches!(r, Err(EngineError::Parse(_))), "got {r:?}");
     }
 
     #[tokio::test]

@@ -10,7 +10,7 @@ use crate::engine::skills::{ActivationMode, SkillStatus};
 
 /// Trimmed Skill view for `Manifest::active_skills`. `#[non_exhaustive]`
 /// — future cycles add fields without SemVer break.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct SkillRef {
     pub id: String,

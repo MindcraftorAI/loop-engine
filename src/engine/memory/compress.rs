@@ -174,6 +174,26 @@ pub async fn compress(
     //    depth cap. Detects cycles by tracking visited ids per walk.
     super::cycle::detect_cycle_in_window(ctx, storage, &predecessors).await?;
 
+    // 2b. Phase F audit-fix close: scope-consistency check across
+    //     the input set. Compressing across `MemoryScope` boundaries
+    //     would violate the privacy invariant — the new compressed
+    //     memory can't simultaneously be (e.g.) team-scoped AND
+    //     skill-scoped. Refuse with `CompressionScopeMismatch`.
+    {
+        let mut iter = predecessors.iter();
+        if let Some(first) = iter.next() {
+            let first_scope = &first.frontmatter.scope;
+            if !iter.all(|m| &m.frontmatter.scope == first_scope) {
+                return Err(EngineError::CompressionScopeMismatch {
+                    window: predecessors
+                        .iter()
+                        .map(|m| m.frontmatter.id.as_str().to_string())
+                        .collect(),
+                });
+            }
+        }
+    }
+
     // 3. Build prompt + invoke LLM.
     let prompt = fill_template(&predecessors);
     let request = GenerateRequest {

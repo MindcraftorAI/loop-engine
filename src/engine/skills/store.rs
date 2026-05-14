@@ -38,6 +38,13 @@ fn parse_skill_file(bytes: &[u8]) -> Result<(SkillFrontmatter, String), EngineEr
 
 /// Insert a new skill. Fails if the skill id already exists (use
 /// `update_skill` for in-place changes).
+///
+/// Phase F audit-fix close (C2 fix): when `frontmatter.authored_by ==
+/// User` AND `frontmatter.evidence_refs` contains `EvidenceRef::
+/// Memory(_)` entries, each cited memory's `consumed_by_user_lessons`
+/// counter increments — making it eviction-immune via the wedge
+/// invariant. Mirrors the lesson-citation behavior; the cross-cutting
+/// wedge for skills.
 pub async fn insert(
     ctx: &Context,
     storage: &dyn Storage,
@@ -54,6 +61,26 @@ pub async fn insert(
     }
     let yaml = render_skill_yaml(&frontmatter, &body)?;
     storage.put(&key, Bytes::from(yaml)).await?;
+
+    // C-F5 wedge wire-up: when the skill is user-authored, every
+    // memory it cites gets its immunity counter bumped. We do this
+    // BEST-EFFORT (warn on failure but don't fail the insert) — the
+    // skill record is the source of truth; counters can be repaired
+    // via `recompute_citation_counts` if they drift.
+    if frontmatter.authored_by.is_user() {
+        for evr in &frontmatter.evidence_refs {
+            if let Some(mid) = evr.as_memory_id() {
+                if let Err(e) =
+                    crate::engine::memory::increment_citation_count(ctx, storage, mid).await
+                {
+                    warn!(
+                        skill = %id, memory = %mid, error = %e,
+                        "insert_skill: failed to increment memory citation counter"
+                    );
+                }
+            }
+        }
+    }
     Ok(Skill::new(frontmatter, body))
 }
 
@@ -148,7 +175,7 @@ pub async fn archive(
         if fm.authored_by.is_user() {
             return Err(EngineError::UserSkillImmune {
                 id: id.to_string(),
-                has_user_lessons: false, // Phase G surfaces this from lesson scan
+                // (Phase F audit-fix close M2: `has_user_lessons` field removed)
             });
         }
     }
@@ -173,8 +200,7 @@ pub async fn delete(
             if fm.authored_by.is_user() {
                 return Err(EngineError::UserSkillImmune {
                     id: id.to_string(),
-                    has_user_lessons: false,
-                });
+                    });
             }
         }
     }

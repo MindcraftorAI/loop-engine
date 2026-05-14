@@ -5,16 +5,14 @@
 //! lists deserialize via the `from_string` migrator (treats bare
 //! slugs as `TeamMember::User`).
 
-use serde::de::{Deserializer, Visitor};
-use serde::ser::Serializer;
+use serde::de::Deserializer;
 use serde::{Deserialize, Serialize};
-use std::fmt;
 
 pub mod store;
 pub use store::{archive, delete, get_by_id, insert, list, update};
 
 /// Phase F D-F6: typed team member discriminator.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "id", rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum TeamMember {
@@ -39,7 +37,7 @@ impl TeamMember {
 }
 
 /// Phase F D-F10: lifecycle status.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum TeamStatus {
@@ -146,7 +144,7 @@ impl Team {
 }
 
 /// Trimmed manifest view.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct TeamRef {
     pub id: String,
@@ -155,15 +153,6 @@ pub struct TeamRef {
     pub status: TeamStatus,
     pub member_count: usize,
 }
-
-// Silence the unused-import for the trait the migrator needs at
-// some Rust versions.
-#[allow(dead_code)]
-fn _silence_visitor<'de, V: Visitor<'de>>(_v: V) {}
-#[allow(dead_code)]
-fn _silence_fmt(_f: &mut fmt::Formatter<'_>) {}
-#[allow(dead_code)]
-fn _silence_serializer<S: Serializer>(_s: S) {}
 
 #[cfg(test)]
 mod tests {

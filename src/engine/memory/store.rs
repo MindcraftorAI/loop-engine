@@ -138,6 +138,35 @@ pub async fn insert(
     content: impl Into<String>,
     now: DateTime<Utc>,
 ) -> Result<Memory, EngineError> {
+    insert_scoped(
+        ctx,
+        storage,
+        embedder,
+        vector_index,
+        id,
+        description,
+        content,
+        now,
+        crate::engine::memory::MemoryScope::default(),
+    )
+    .await
+}
+
+/// Insert a memory with an explicit [`MemoryScope`]. Phase F D-F8 +
+/// audit-fix close: the write half of the scope-aware manifest filter.
+/// `insert` delegates to this with `MemoryScope::User`.
+#[allow(clippy::too_many_arguments)]
+pub async fn insert_scoped(
+    ctx: &Context,
+    storage: &dyn Storage,
+    embedder: &dyn Embedder,
+    vector_index: &dyn VectorIndex,
+    id: MemoryId,
+    description: impl Into<String>,
+    content: impl Into<String>,
+    now: DateTime<Utc>,
+    scope: crate::engine::memory::MemoryScope,
+) -> Result<Memory, EngineError> {
     let description = description.into();
     let content = content.into();
     // 1. Embed.
@@ -146,8 +175,8 @@ pub async fn insert(
     let embedding = embeddings
         .pop()
         .ok_or_else(|| EngineError::Parse("embedder returned zero vectors".into()))?;
-    // 2. Build frontmatter + persist the .md file.
-    let fm = MemoryFrontmatter::new(id.clone(), description, now);
+    // 2. Build frontmatter (with scope) + persist the .md file.
+    let fm = MemoryFrontmatter::new(id.clone(), description, now).with_scope(scope);
     let yaml = render_memory_yaml(&fm, &content)?;
     let md_key = StorageKey::memory(ctx, id.as_str());
     storage.put(&md_key, Bytes::from(yaml)).await?;

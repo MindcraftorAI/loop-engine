@@ -29,7 +29,7 @@ pub use r#ref::SkillRef;
 pub use store::{archive, delete, get_by_id, insert, list, update};
 
 /// Phase F D-F4: how a skill becomes active in a session.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum ActivationMode {
@@ -76,7 +76,7 @@ pub enum ContextMode {
 
 /// Phase F D-F10: skill lifecycle status — matches lesson
 /// lifecycle pattern.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum SkillStatus {
@@ -148,6 +148,13 @@ pub struct SkillFrontmatter {
     /// invariant (user-authored skills can't be auto-archived).
     #[serde(default)]
     pub authored_by: crate::engine::yaml::Authorship,
+    /// Phase F audit-fix close: typed memory citations on the skill.
+    /// When a user-authored skill carries `EvidenceRef::Memory(mid)`
+    /// entries, the cited memories' immunity counters increment on
+    /// `insert_skill` (and decrement on retirement — Phase G wire-up).
+    /// Mirrors `CausalNarrative::evidence_refs` semantics for lessons.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub evidence_refs: Vec<crate::engine::yaml::EvidenceRef>,
 }
 
 impl SkillFrontmatter {
@@ -171,6 +178,7 @@ impl SkillFrontmatter {
             activation: ActivationMode::default(),
             status: SkillStatus::default(),
             authored_by: crate::engine::yaml::Authorship::default(),
+            evidence_refs: Vec::new(),
         }
     }
 }

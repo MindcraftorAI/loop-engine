@@ -41,8 +41,8 @@ pub use lifecycle::{
 // `decrement_citation_count` is `pub(crate)` — Phase G consumes from
 // within the engine; not part of the external API.
 pub use store::{
-    delete, get_by_id, get_by_id_with_embedding, increment_citation_count, insert, prune,
-    search,
+    delete, get_by_id, get_by_id_with_embedding, increment_citation_count, insert, insert_scoped,
+    prune, search,
 };
 
 /// YAML frontmatter for a memory file on disk. Mirrors
@@ -85,7 +85,8 @@ pub struct MemoryFrontmatter {
 
 impl MemoryFrontmatter {
     /// Construct a new frontmatter with required fields. `updated_at`,
-    /// counters, and `derived_from` default to None/0/empty.
+    /// counters, and `derived_from` default to None/0/empty. `scope`
+    /// defaults to [`MemoryScope::User`] — set via [`Self::with_scope`].
     pub fn new(
         id: MemoryId,
         description: impl Into<String>,
@@ -100,6 +101,16 @@ impl MemoryFrontmatter {
             derived_from: Vec::new(),
             scope: MemoryScope::default(),
         }
+    }
+
+    /// Builder: set the [`MemoryScope`]. Phase F audit-fix close —
+    /// the write half of the scope-aware manifest filter (the read
+    /// half was already wired). Without this, scope can only be set
+    /// by editing the on-disk YAML directly.
+    #[must_use]
+    pub fn with_scope(mut self, scope: MemoryScope) -> Self {
+        self.scope = scope;
+        self
     }
 }
 
@@ -260,6 +271,31 @@ mod tests {
         let prunable = MemoryFrontmatter::new(id, "prunable", now);
         assert!(!guarded(&immune), "user-immune memory must be skipped");
         assert!(guarded(&prunable), "uncited memory must be prunable");
+    }
+
+    #[test]
+    fn memory_frontmatter_with_scope_builder_overrides_default() {
+        let fm = MemoryFrontmatter::new(MemoryId::new("mem-scope0001"), "x", Utc::now())
+            .with_scope(MemoryScope::Team("team-eng".into()));
+        assert_eq!(fm.scope, MemoryScope::Team("team-eng".into()));
+    }
+
+    /// Phase F audit-fix close A-M7: a legacy YAML without the
+    /// `scope` field MUST deserialize cleanly and default to
+    /// `MemoryScope::User`. Validates the `#[serde(default)]` chain
+    /// for the back-compat guarantee called out in the docstring.
+    #[test]
+    fn memory_frontmatter_legacy_yaml_without_scope_defaults_to_user() {
+        let yaml = r#"
+id: mem-legacy001
+description: legacy memory
+created_at: "2026-05-14T00:00:00.000Z"
+consumed_by_user_lessons: 0
+"#;
+        let fm: MemoryFrontmatter = serde_yml::from_str(yaml).unwrap();
+        assert_eq!(fm.scope, MemoryScope::User);
+        assert_eq!(fm.id.as_str(), "mem-legacy001");
+        assert_eq!(fm.consumed_by_user_lessons, 0);
     }
 
     #[test]

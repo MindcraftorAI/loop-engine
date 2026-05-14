@@ -35,6 +35,17 @@ pub async fn insert(
     frontmatter: PersonaFrontmatter,
     body: impl Into<String>,
 ) -> Result<Persona, EngineError> {
+    // Phase F audit-fix close A-M2: id-mismatch is a caller bug,
+    // not a data corruption (without the check, the on-disk
+    // `frontmatter.id` would silently drift from the storage key
+    // path — listings, deletes, and citation lookups would all
+    // disagree about the canonical id).
+    if frontmatter.id != id {
+        return Err(EngineError::Parse(format!(
+            "persona id mismatch: storage key {id} vs frontmatter.id {}",
+            frontmatter.id
+        )));
+    }
     let body = body.into();
     let key = StorageKey::persona(ctx, id);
     if storage.get(&key).await?.is_some() {
@@ -189,6 +200,54 @@ mod tests {
         insert(&ctx(), storage.as_ref(), "pers-frc1", fm, "").await.unwrap();
         let p = archive(&ctx(), storage.as_ref(), "pers-frc1", true).await.unwrap();
         assert_eq!(p.frontmatter.status, PersonaStatus::Archived);
+    }
+
+    #[tokio::test]
+    async fn update_mutates_frontmatter_and_body() {
+        let storage: Arc<dyn Storage> = Arc::new(MemoryStorage::default());
+        let fm = PersonaFrontmatter::new("pers-upd1", "old name", "old desc");
+        insert(&ctx(), storage.as_ref(), "pers-upd1", fm, "old body").await.unwrap();
+        let r = update(&ctx(), storage.as_ref(), "pers-upd1", |fm, body| {
+            fm.name = "new name".into();
+            fm.status = PersonaStatus::Active;
+            *body = "new body".into();
+        })
+        .await
+        .unwrap();
+        assert_eq!(r.frontmatter.name, "new name");
+        assert_eq!(r.frontmatter.status, PersonaStatus::Active);
+        assert!(r.body.contains("new body"));
+    }
+
+    #[tokio::test]
+    async fn delete_force_false_blocks_user_authored() {
+        let storage: Arc<dyn Storage> = Arc::new(MemoryStorage::default());
+        let mut fm = PersonaFrontmatter::new("pers-del1", "u", "x");
+        fm.authored_by = Authorship::User;
+        insert(&ctx(), storage.as_ref(), "pers-del1", fm, "").await.unwrap();
+        let r = delete(&ctx(), storage.as_ref(), "pers-del1", false).await;
+        assert!(matches!(r, Err(EngineError::UserPersonaImmune { .. })));
+        // Persona still present.
+        assert!(get_by_id(&ctx(), storage.as_ref(), "pers-del1").await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn delete_force_true_removes_user_authored() {
+        let storage: Arc<dyn Storage> = Arc::new(MemoryStorage::default());
+        let mut fm = PersonaFrontmatter::new("pers-rmf1", "u", "x");
+        fm.authored_by = Authorship::User;
+        insert(&ctx(), storage.as_ref(), "pers-rmf1", fm, "").await.unwrap();
+        delete(&ctx(), storage.as_ref(), "pers-rmf1", true).await.unwrap();
+        assert!(get_by_id(&ctx(), storage.as_ref(), "pers-rmf1").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn insert_rejects_id_mismatch_between_key_and_frontmatter() {
+        let storage: Arc<dyn Storage> = Arc::new(MemoryStorage::default());
+        // frontmatter says one id, storage key says another → reject.
+        let fm = PersonaFrontmatter::new("pers-fmid1", "n", "d");
+        let r = insert(&ctx(), storage.as_ref(), "pers-keyid1", fm, "body").await;
+        assert!(matches!(r, Err(EngineError::Parse(_))), "got {r:?}");
     }
 
     #[tokio::test]
