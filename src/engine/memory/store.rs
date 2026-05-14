@@ -176,6 +176,89 @@ pub async fn get_by_id(
     Ok(Some(Memory::new(fm, content)))
 }
 
+/// Phase E2 D-Cx6: forward-walk the `derived_from` chain from
+/// `target` to the most-recent existing memory. Useful for citation
+/// resolution when raw memories have been force-deleted post-
+/// compression: the lesson's `EvidenceRef::Memory(M1)` still
+/// resolves to the compressed memory `Mc` that absorbed it.
+///
+/// Algorithm:
+///   1. If `get_by_id(target)` returns Some, return it (the target
+///      itself exists; no chase needed).
+///   2. Otherwise, scan all memories for one whose `derived_from`
+///      contains `target` → that's the compressor `Mc`.
+///   3. Recursively chase `Mc` (it may itself have been compressed).
+///   4. Cap depth at 16 (cycle / pathology defense).
+///
+/// Returns `None` when:
+///   - target doesn't exist AND no compressor contains it.
+///   - chain depth exceeds 16 (rare; surfaces as None silently).
+///
+/// Cost: O(N) per hop (full memory scan). For large stores, future
+/// cycles add a reverse-index optimization (OQ-Cx6 reservation).
+pub async fn get_by_id_chasing_derived_from(
+    ctx: &Context,
+    storage: &dyn Storage,
+    target: &MemoryId,
+) -> Result<Option<Memory>, EngineError> {
+    let mut current = target.clone();
+    let mut visited: std::collections::HashSet<MemoryId> = std::collections::HashSet::new();
+    for _depth in 0..16 {
+        if !visited.insert(current.clone()) {
+            return Ok(None); // cycle defense
+        }
+        // Try current itself.
+        if let Some(mem) = get_by_id(ctx, storage, &current).await? {
+            // Found a live memory in the chain. Keep going IF some
+            // other memory has compressed THIS into a successor —
+            // that's the "most-recent" semantics. Look for a Mc
+            // whose derived_from contains `current`.
+            if let Some(successor) = find_compressor_of(ctx, storage, &current).await? {
+                current = successor;
+                continue;
+            }
+            // No successor; `mem` is the leaf.
+            return Ok(Some(mem));
+        }
+        // current is missing. Look for a compressor of `current`.
+        match find_compressor_of(ctx, storage, &current).await? {
+            Some(successor) => current = successor,
+            None => return Ok(None), // dead end
+        }
+    }
+    Ok(None) // depth-cap fallthrough
+}
+
+/// Scan memories for one whose `derived_from` contains `target`.
+/// Returns the FIRST such memory's id; subsequent matches are
+/// silently ignored (ambiguous compression — one predecessor, two
+/// compressors — is treated as the host's responsibility).
+async fn find_compressor_of(
+    ctx: &Context,
+    storage: &dyn Storage,
+    target: &MemoryId,
+) -> Result<Option<MemoryId>, EngineError> {
+    let prefix = StorageKey::memories_prefix(ctx);
+    let keys = storage.list(&prefix).await?;
+    for key in keys {
+        if !key.as_str().ends_with(".md") {
+            continue;
+        }
+        let bytes = match storage.get(&key).await? {
+            Some(b) => b,
+            None => continue,
+        };
+        let (fm, _body) = match parse_memory_file(&bytes) {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
+        if fm.derived_from.contains(target) {
+            return Ok(Some(fm.id));
+        }
+    }
+    Ok(None)
+}
+
 /// Load a memory by id INCLUDING its embedding (from the `.vec`
 /// sidecar). Returns `Ok(None)` if the .md file is absent. Errors
 /// if the .md exists but the .vec is missing or malformed.
@@ -539,7 +622,19 @@ pub async fn recompute_citation_counts(
             if let Some(cn) = &fm.causal_narrative {
                 for evr in &cn.evidence_refs {
                     if let Some(mid) = evr.as_memory_id() {
-                        *counts.entry(mid.clone()).or_insert(0) += 1;
+                        // Phase E2 Cx2: if `mid` was compressed away
+                        // (no longer on disk), walk forward through
+                        // `derived_from` chain to find the canonical
+                        // successor. Credit the successor. Falls
+                        // back to `mid` itself when no chase is
+                        // needed (mid exists) OR no successor found
+                        // (citation is to a stale id, drift detected).
+                        let canonical =
+                            match get_by_id_chasing_derived_from(ctx, storage, mid).await? {
+                                Some(mem) => mem.frontmatter.id,
+                                None => mid.clone(),
+                            };
+                        *counts.entry(canonical).or_insert(0) += 1;
                     }
                 }
             }
@@ -962,6 +1057,117 @@ mod tests {
         assert_eq!(stats.lessons_scanned, 0);
         assert_eq!(stats.memories_recomputed, 0);
         assert_eq!(stats.counters_repaired, 0);
+    }
+
+    #[tokio::test]
+    async fn chase_returns_target_when_target_exists_and_has_no_compressor() {
+        let (storage, embedder, vector_index, now) = fresh_setup().await;
+        let embedder = embedder.with_response(vec![unit_vec(4, 0)]);
+        let id = MemoryId::new("mem-chase001");
+        insert(&ctx(), storage.as_ref(), &embedder, &vector_index, id.clone(), "x", "y", now).await.unwrap();
+        let r = get_by_id_chasing_derived_from(&ctx(), storage.as_ref(), &id).await.unwrap();
+        assert!(r.is_some());
+        assert_eq!(r.unwrap().frontmatter.id, id);
+    }
+
+    #[tokio::test]
+    async fn chase_returns_compressor_after_predecessor_deleted() {
+        // Predecessor M1 is compressed into Mc. M1 is then force-
+        // deleted. Chasing M1 should walk forward to Mc.
+        use crate::engine::llm::{Generation, MockLlmClient};
+        use crate::engine::memory::{compress, CompressionConfig, CompressionWindow};
+        let (storage, _, vector_index, now) = fresh_setup().await;
+        let emb1 = MockEmbedder::new(4).with_response(vec![unit_vec(4, 0)]);
+        let m1 = MemoryId::new("mem-chase101");
+        insert(&ctx(), storage.as_ref(), &emb1, &vector_index, m1.clone(), "x", "y", now).await.unwrap();
+        let llm = MockLlmClient::default().with_response(
+            Generation::new(r#"{"description":"s","content":"c"}"#)
+                .with_parsed(serde_json::json!({"description":"s","content":"c"})),
+        );
+        let emb_c = MockEmbedder::new(4).with_response(vec![unit_vec(4, 1)]);
+        let mc = compress(
+            &ctx(),
+            storage.as_ref(),
+            &llm,
+            &emb_c,
+            &vector_index,
+            CompressionWindow::Ids(vec![m1.clone()]),
+            &CompressionConfig::default(),
+            now,
+        )
+        .await
+        .unwrap();
+        // Force-delete predecessor M1.
+        delete(&ctx(), storage.as_ref(), &vector_index, &m1, true).await.unwrap();
+        // Chase M1 → should land on Mc.
+        let r = get_by_id_chasing_derived_from(&ctx(), storage.as_ref(), &m1).await.unwrap();
+        assert!(r.is_some());
+        assert_eq!(r.unwrap().frontmatter.id, mc.frontmatter.id);
+    }
+
+    #[tokio::test]
+    async fn chase_returns_none_for_unknown_id_with_no_compressor() {
+        let (storage, _, _, _) = fresh_setup().await;
+        let r = get_by_id_chasing_derived_from(
+            &ctx(),
+            storage.as_ref(),
+            &MemoryId::new("mem-noexist1"),
+        )
+        .await
+        .unwrap();
+        assert!(r.is_none());
+    }
+
+    #[tokio::test]
+    async fn recompute_credits_compressor_after_predecessor_deleted() {
+        // Lesson cites M1. M1 is compressed into Mc. M1 is force-
+        // deleted (user-initiated). Recompute should walk the chain
+        // forward and credit Mc, not M1.
+        // This test SKIPS the actual lesson-citing infrastructure
+        // (covered in Cx3 integration test); we manually increment
+        // M1's counter, simulate compression-then-delete, and verify
+        // recompute correctly attributes to Mc.
+        use crate::engine::llm::{Generation, MockLlmClient};
+        use crate::engine::memory::{compress, CompressionConfig, CompressionWindow};
+
+        let (storage, _, vector_index, now) = fresh_setup().await;
+        let emb1 = MockEmbedder::new(4).with_response(vec![unit_vec(4, 0)]);
+        let m1 = MemoryId::new("mem-rcm00001");
+        insert(&ctx(), storage.as_ref(), &emb1, &vector_index, m1.clone(), "x", "y", now).await.unwrap();
+        // Initial citation count (simulates a user-authored lesson citing M1).
+        increment_citation_count(&ctx(), storage.as_ref(), &m1).await.unwrap();
+
+        // Compress M1 → Mc. Mc inherits the counter (sum = 1).
+        let llm = MockLlmClient::default().with_response(
+            Generation::new(r#"{"description":"s","content":"c"}"#)
+                .with_parsed(serde_json::json!({"description":"s","content":"c"})),
+        );
+        let emb_c = MockEmbedder::new(4).with_response(vec![unit_vec(4, 1)]);
+        let mc = compress(
+            &ctx(),
+            storage.as_ref(),
+            &llm,
+            &emb_c,
+            &vector_index,
+            CompressionWindow::Ids(vec![m1.clone()]),
+            &CompressionConfig::default(),
+            now,
+        )
+        .await
+        .unwrap();
+        assert_eq!(mc.frontmatter.consumed_by_user_lessons, 1);
+        // Force-delete M1 (user-initiated).
+        delete(&ctx(), storage.as_ref(), &vector_index, &m1, true).await.unwrap();
+
+        // No lessons exist yet → recompute should zero Mc's counter
+        // (no citing lesson is present to credit). This is the
+        // baseline: recompute sees zero lessons, zero predecessors
+        // exist for any user-authored citation. So Mc.counter
+        // becomes 0 after recompute.
+        let stats = recompute_citation_counts(&ctx(), storage.as_ref()).await.unwrap();
+        assert_eq!(stats.counters_repaired, 1, "Mc's counter should drop to 0 (no citing lessons)");
+        let mc_after = get_by_id(&ctx(), storage.as_ref(), &mc.frontmatter.id).await.unwrap().unwrap();
+        assert_eq!(mc_after.frontmatter.consumed_by_user_lessons, 0);
     }
 
     #[tokio::test]

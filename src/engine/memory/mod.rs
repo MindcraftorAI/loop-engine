@@ -31,8 +31,9 @@ pub use id::MemoryId;
 // `decrement_citation_count` is `pub(crate)` — Phase G consumes from
 // within the engine; not part of the external API.
 pub use store::{
-    delete, get_by_id, get_by_id_with_embedding, increment_citation_count, insert, prune,
-    recompute_citation_counts, search, RecomputeStats,
+    delete, get_by_id, get_by_id_chasing_derived_from, get_by_id_with_embedding,
+    increment_citation_count, insert, prune, recompute_citation_counts, search,
+    RecomputeStats,
 };
 
 /// YAML frontmatter for a memory file on disk. Mirrors
