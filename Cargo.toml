@@ -1,15 +1,21 @@
 [package]
-name = "loop-daemon"
-version = "0.0.1"
+name = "loop-engine"
+version = "1.0.0"
 edition = "2021"
 rust-version = "1.85"
-description = "Live verification daemon for Loop — watches Claude Code sessions for sentiment signals and emits to the lesson layer"
+description = "Cognitive-memory substrate for AI agents — manifest assembly, lesson lifecycle, scoped memory, and a wedge-gated promotion check"
 license = "MIT"
-repository = "https://github.com/RankLabsDev/loop-daemon"
+repository = "https://github.com/RankLabsDev/loop-engine"
+readme = "README.md"
+keywords = ["agent", "memory", "llm", "mcp", "cognitive"]
+categories = ["data-structures", "asynchronous"]
+# Phase H D-H3: publish gate stays closed inside the monorepo. The
+# standalone repo split + crates.io publish happen post-v1.0-tag as
+# separate operations (see CONTRIBUTING.md "Releasing").
 publish = false
 
 [[bin]]
-name = "loop-daemon"
+name = "loop-engine"
 path = "src/main.rs"
 
 [dependencies]
@@ -133,7 +139,7 @@ dirs = "6"
 # Self-reference enables `--features test-fixtures` in tests/ so
 # integration tests can use `MockSentimentClassifier` etc. Locked
 # Day 15 D13; gap caught in Day 15 audit M3.
-loop-daemon = { path = ".", features = ["test-fixtures"] }
+loop-engine = { path = ".", features = ["test-fixtures"] }
 
 [profile.release]
 strip = "symbols"

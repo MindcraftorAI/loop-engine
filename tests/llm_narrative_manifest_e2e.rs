@@ -16,13 +16,13 @@ use std::sync::Arc;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 
-use loop_daemon::engine::context::Context;
-use loop_daemon::engine::lessons::{
+use loop_engine::engine::context::Context;
+use loop_engine::engine::lessons::{
     get_by_id, narrative::generate as generate_narrative, NarrativeConfig, NarrativeContext,
 };
-use loop_daemon::engine::llm::{Generation, LlmClient, MockLlmClient};
-use loop_daemon::engine::manifest::{assemble, AssembleConfig};
-use loop_daemon::engine::storage::{MemoryStorage, Storage, StorageKey};
+use loop_engine::engine::llm::{Generation, LlmClient, MockLlmClient};
+use loop_engine::engine::manifest::{assemble, AssembleConfig};
+use loop_engine::engine::storage::{MemoryStorage, Storage, StorageKey};
 
 fn now() -> DateTime<Utc> {
     "2026-05-13T12:00:00Z".parse().unwrap()
@@ -75,7 +75,7 @@ async fn narrative_generation_produces_struct_consumed_by_manifest_gate() {
     .unwrap();
     assert_eq!(m_before.active_lessons.len(), 1);
     let gate_before = m_before.active_lessons[0].gate.as_ref().expect("gate");
-    use loop_daemon::engine::lessons::{BlockReason, GateDecision};
+    use loop_engine::engine::lessons::{BlockReason, GateDecision};
     match gate_before {
         GateDecision::Block { reasons } => {
             assert!(reasons.iter().any(|r| matches!(r, BlockReason::MissingCausalNarrative)));
@@ -107,7 +107,7 @@ async fn narrative_generation_produces_struct_consumed_by_manifest_gate() {
     assert_eq!(narrative.trigger, "user kept committing unformatted code");
 
     // 4. Persist the narrative by rewriting the lesson with it.
-    use loop_daemon::engine::yaml::{
+    use loop_engine::engine::yaml::{
         combine_frontmatter, writer::serialize_lesson_frontmatter,
     };
     let loaded = get_by_id(&ctx, storage.as_ref(), id).await.unwrap().unwrap();
@@ -181,9 +181,9 @@ async fn narrative_validation_failure_does_not_persist() {
     // `narrative.is_none()` on storage, which is tautological because
     // `narrative::generate` has no storage arg. The re-assemble is
     // the actual end-to-end claim.
-    use loop_daemon::engine::lessons::{BlockReason, GateDecision};
-    use loop_daemon::engine::manifest::assemble;
-    use loop_daemon::engine::manifest::AssembleConfig as Cfg;
+    use loop_engine::engine::lessons::{BlockReason, GateDecision};
+    use loop_engine::engine::manifest::assemble;
+    use loop_engine::engine::manifest::AssembleConfig as Cfg;
 
     let ctx = Context::single_user_local();
     let storage: Arc<dyn Storage> = Arc::new(MemoryStorage::default());
@@ -236,7 +236,7 @@ async fn narrative_validation_failure_does_not_persist() {
 
 #[tokio::test]
 async fn narrative_refusal_distinguished_from_validation_failure() {
-    use loop_daemon::engine::error::EngineError;
+    use loop_engine::engine::error::EngineError;
     let ctx = Context::single_user_local();
     let refusal_json = r#"{"error": "insufficient_context"}"#;
     let mock_llm = MockLlmClient::default().with_response(success_generation(refusal_json));

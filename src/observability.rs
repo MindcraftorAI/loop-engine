@@ -5,7 +5,7 @@
 //!   - `~/.loop/logs/daemon.log` (JSON format, line-buffered) when detached
 //!
 //! Filtering via `RUST_LOG` env var (e.g. `RUST_LOG=debug` for verbose).
-//! Defaults to `loop_daemon=info`.
+//! Defaults to `loop_engine=info`.
 
 use std::fs::OpenOptions;
 use std::io;
@@ -14,7 +14,7 @@ use std::path::Path;
 use anyhow::Result;
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
-const DEFAULT_FILTER: &str = "loop_daemon=info,warn";
+const DEFAULT_FILTER: &str = "loop_engine=info,warn";
 
 pub fn init_foreground() -> Result<()> {
     let filter =

@@ -1,4 +1,4 @@
-//! `loop-daemon` library root.
+//! `loop-engine` library root.
 //!
 //! Two consumer layers:
 //! - [`engine`] — host-agnostic. The "to-be-extracted-as-loop-engine"
@@ -23,7 +23,7 @@ pub mod observability;
 // Backward-compat re-exports (Day 14 Phase 1 — delegating wrappers).
 //
 // External callers — integration tests, future external consumers — can
-// continue using `loop_daemon::lessons::*` etc. while the underlying
-// modules live at `loop_daemon::engine::lessons::*`. Phase 2 callers will
+// continue using `loop_engine::lessons::*` etc. while the underlying
+// modules live at `loop_engine::engine::lessons::*`. Phase 2 callers will
 // migrate to the explicit `engine::*` path and these re-exports retire.
 pub use engine::{buffer, lessons, lifecycle, paths, pid, yaml};

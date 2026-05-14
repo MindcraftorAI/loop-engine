@@ -1,4 +1,4 @@
-//! `loop-daemon` binary entry.
+//! `loop-engine` binary entry.
 
 use std::fs;
 use std::process::ExitCode;
@@ -7,12 +7,12 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use tracing::{error, info};
 
-use loop_daemon::cli::{Cli, Command};
-use loop_daemon::config;
-use loop_daemon::lifecycle::{self, pre_detach_checks, read_pid_file, run_body};
-use loop_daemon::observability;
-use loop_daemon::paths;
-use loop_daemon::pid::pid_is_alive;
+use loop_engine::cli::{Cli, Command};
+use loop_engine::config;
+use loop_engine::lifecycle::{self, pre_detach_checks, read_pid_file, run_body};
+use loop_engine::observability;
+use loop_engine::paths;
+use loop_engine::pid::pid_is_alive;
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
@@ -20,7 +20,7 @@ fn main() -> ExitCode {
         Ok(code) => code,
         Err(err) => {
             // Tracing may not be initialized if early-init failed; print to stderr.
-            eprintln!("loop-daemon: error: {err:#}");
+            eprintln!("loop-engine: error: {err:#}");
             ExitCode::from(1)
         }
     }
@@ -98,18 +98,18 @@ fn status() -> Result<ExitCode> {
     match read_pid_file(&pid_path)? {
         None => {
             println!(
-                "loop-daemon: not running (no PID file at {})",
+                "loop-engine: not running (no PID file at {})",
                 pid_path.display()
             );
             Ok(ExitCode::from(1))
         }
         Some(pid) => {
             if pid_is_alive(pid) {
-                println!("loop-daemon: running (pid={pid})");
+                println!("loop-engine: running (pid={pid})");
                 Ok(ExitCode::SUCCESS)
             } else {
                 println!(
-                    "loop-daemon: not running (stale PID file at {}, pid={pid})",
+                    "loop-engine: not running (stale PID file at {}, pid={pid})",
                     pid_path.display()
                 );
                 Ok(ExitCode::from(1))
@@ -123,13 +123,13 @@ fn stop() -> Result<ExitCode> {
     let pid_path = paths::daemon_pid_path()?;
     let pid = match read_pid_file(&pid_path)? {
         None => {
-            println!("loop-daemon: not running (no PID file)");
+            println!("loop-engine: not running (no PID file)");
             return Ok(ExitCode::SUCCESS);
         }
         Some(pid) => pid,
     };
     if !pid_is_alive(pid) {
-        println!("loop-daemon: PID file present (pid={pid}) but process not alive; clearing");
+        println!("loop-engine: PID file present (pid={pid}) but process not alive; clearing");
         lifecycle::remove_pid_file()?;
         return Ok(ExitCode::SUCCESS);
     }
@@ -139,6 +139,6 @@ fn stop() -> Result<ExitCode> {
         let err = std::io::Error::last_os_error();
         anyhow::bail!("kill(pid={pid}, SIGTERM) failed: {err}");
     }
-    println!("loop-daemon: sent SIGTERM to pid={pid}");
+    println!("loop-engine: sent SIGTERM to pid={pid}");
     Ok(ExitCode::SUCCESS)
 }

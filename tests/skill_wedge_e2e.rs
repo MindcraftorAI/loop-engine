@@ -25,19 +25,19 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 
-use loop_daemon::engine::context::Context;
-use loop_daemon::engine::embedding::MockEmbedder;
-use loop_daemon::engine::error::EngineError;
-use loop_daemon::engine::memory::{
+use loop_engine::engine::context::Context;
+use loop_engine::engine::embedding::MockEmbedder;
+use loop_engine::engine::error::EngineError;
+use loop_engine::engine::memory::{
     self, get_by_id as memory_get_by_id, insert as memory_insert, MemoryId,
 };
-use loop_daemon::engine::skills::{
+use loop_engine::engine::skills::{
     archive as archive_skill, delete as delete_skill, get_by_id as get_skill_by_id,
     insert as insert_skill, SkillFrontmatter,
 };
-use loop_daemon::engine::storage::{MemoryStorage, Storage};
-use loop_daemon::engine::vector::HnswVectorIndex;
-use loop_daemon::engine::yaml::{Authorship, EvidenceRef};
+use loop_engine::engine::storage::{MemoryStorage, Storage};
+use loop_engine::engine::vector::HnswVectorIndex;
+use loop_engine::engine::yaml::{Authorship, EvidenceRef};
 
 fn ctx() -> Context {
     Context::single_user_local()
@@ -112,7 +112,7 @@ async fn user_authored_skill_citing_memory_makes_both_immune() {
         .unwrap();
     assert_eq!(
         s_still.frontmatter.status,
-        loop_daemon::engine::skills::SkillStatus::Draft
+        loop_engine::engine::skills::SkillStatus::Draft
     );
 
     // 5. User-initiated archive (force=true) succeeds.
@@ -121,7 +121,7 @@ async fn user_authored_skill_citing_memory_makes_both_immune() {
         .unwrap();
     assert_eq!(
         archived.frontmatter.status,
-        loop_daemon::engine::skills::SkillStatus::Archived
+        loop_engine::engine::skills::SkillStatus::Archived
     );
 
     // 6. Engine-initiated delete refused (insert a fresh user-
@@ -189,7 +189,7 @@ async fn llm_authored_skill_does_not_confer_immunity() {
         .unwrap();
     assert_eq!(
         archived.frontmatter.status,
-        loop_daemon::engine::skills::SkillStatus::Archived
+        loop_engine::engine::skills::SkillStatus::Archived
     );
 
     // Engine-initiated delete of M1 MUST succeed (no user-immunity).

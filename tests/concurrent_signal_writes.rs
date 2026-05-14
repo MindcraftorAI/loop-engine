@@ -21,10 +21,10 @@
 use std::sync::{Mutex, OnceLock};
 use std::thread;
 
-use loop_daemon::lessons::{record_sentiment_signal, SignalPolarity};
-use loop_daemon::paths;
-use loop_daemon::yaml::writer::serialize_lesson_frontmatter;
-use loop_daemon::yaml::{combine_frontmatter, LessonFrontmatter, LessonStatus};
+use loop_engine::lessons::{record_sentiment_signal, SignalPolarity};
+use loop_engine::paths;
+use loop_engine::yaml::writer::serialize_lesson_frontmatter;
+use loop_engine::yaml::{combine_frontmatter, LessonFrontmatter, LessonStatus};
 use tempfile::TempDir;
 
 fn env_lock() -> &'static Mutex<()> {

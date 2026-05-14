@@ -20,16 +20,16 @@ use std::sync::Arc;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 
-use loop_daemon::engine::context::Context;
-use loop_daemon::engine::embedding::MockEmbedder;
-use loop_daemon::engine::llm::{Generation, MockLlmClient};
-use loop_daemon::engine::memory::{
+use loop_engine::engine::context::Context;
+use loop_engine::engine::embedding::MockEmbedder;
+use loop_engine::engine::llm::{Generation, MockLlmClient};
+use loop_engine::engine::memory::{
     compress, delete, get_by_id, get_by_id_chasing_derived_from, increment_citation_count,
     insert, recompute_citation_counts, CompressionConfig, CompressionWindow, MemoryId,
 };
-use loop_daemon::engine::storage::{MemoryStorage, Storage, StorageKey};
-use loop_daemon::engine::vector::HnswVectorIndex;
-use loop_daemon::engine::yaml::{
+use loop_engine::engine::storage::{MemoryStorage, Storage, StorageKey};
+use loop_engine::engine::vector::HnswVectorIndex;
+use loop_engine::engine::yaml::{
     combine_frontmatter, writer::serialize_lesson_frontmatter, Authorship, CausalNarrative,
     Confidence, EvidenceRef, GeneratedBy, LessonFrontmatter, LessonStatus,
 };
@@ -290,7 +290,7 @@ async fn compress_with_predecessor_window_yields_correct_derived_from() {
         .await
         .unwrap();
     }
-    let predicate: loop_daemon::engine::memory::PrunePredicate =
+    let predicate: loop_engine::engine::memory::PrunePredicate =
         Box::new(|fm| fm.description == "matchable");
     let llm = MockLlmClient::default().with_response(success_generation(
         r#"{"description":"summary","content":"compressed"}"#,

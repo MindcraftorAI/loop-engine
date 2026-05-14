@@ -4,7 +4,7 @@ use clap::{Parser, Subcommand};
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "loop-daemon",
+    name = "loop-engine",
     about = "Live verification daemon for Loop — watches Claude Code sessions and emits sentiment signals",
     version
 )]

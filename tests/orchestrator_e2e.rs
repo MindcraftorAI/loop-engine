@@ -10,9 +10,9 @@ use std::sync::Arc;
 
 use chrono::Utc;
 
-use loop_daemon::engine::context::Context;
-use loop_daemon::engine::events::EngineEvent;
-use loop_daemon::engine::sentiment::{
+use loop_engine::engine::context::Context;
+use loop_engine::engine::events::EngineEvent;
+use loop_engine::engine::sentiment::{
     classifier::MockSentimentClassifier,
     signals::MockSignalWriter,
     types::{

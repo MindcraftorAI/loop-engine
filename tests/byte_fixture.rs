@@ -4,8 +4,8 @@
 //!
 //! If audit findings A1-A6 ever regress, this test fails immediately.
 
-use loop_daemon::yaml::writer::serialize_lesson_frontmatter;
-use loop_daemon::yaml::{
+use loop_engine::yaml::writer::serialize_lesson_frontmatter;
+use loop_engine::yaml::{
     CausalNarrative, IngestProvenance, IngestSourceType, LessonFrontmatter, LessonStatus,
 };
 
@@ -20,11 +20,11 @@ fn matches_ts_load_path_byte_output() {
             trigger: "commit attempt without typecheck".into(),
             failure_mode: "CI red on next push".into(),
             correction: "run npm run typecheck before commit".into(),
-            confidence: loop_daemon::yaml::reader::__expose_confidence_inferred(),
-            evidence_refs: vec![loop_daemon::engine::yaml::EvidenceRef::Quote(
+            confidence: loop_engine::yaml::reader::__expose_confidence_inferred(),
+            evidence_refs: vec![loop_engine::engine::yaml::EvidenceRef::Quote(
                 "\"CI broke again\"".into(),
             )],
-            generated_by: loop_daemon::yaml::reader::__expose_generated_by_llm(),
+            generated_by: loop_engine::yaml::reader::__expose_generated_by_llm(),
             generated_at: "2026-05-13T00:00:00.000Z".into(),
         }),
         target_skill: Some("testing-discipline".into()),

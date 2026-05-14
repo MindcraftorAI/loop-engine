@@ -8,9 +8,9 @@
 use std::fs;
 use std::path::PathBuf;
 
-use loop_daemon::yaml::reader::parse_lesson_frontmatter;
-use loop_daemon::yaml::writer::serialize_lesson_frontmatter;
-use loop_daemon::yaml::{combine_frontmatter, split_frontmatter};
+use loop_engine::yaml::reader::parse_lesson_frontmatter;
+use loop_engine::yaml::writer::serialize_lesson_frontmatter;
+use loop_engine::yaml::{combine_frontmatter, split_frontmatter};
 
 fn locate_real_lesson() -> Option<PathBuf> {
     let home = dirs::home_dir()?;

@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  test:
+    name: test + clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo fmt --check
+        run: cargo fmt --check
+      - name: cargo clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: cargo test --lib
+        run: cargo test --lib
+      - name: cargo test --tests
+        run: cargo test --tests
+
+  public-api:
+    name: public-api stability gate
+    runs-on: ubuntu-latest
+    # Advisory only until v1.0 baseline lands. Flip continue-on-error
+    # to false once `public-api-v1.0.txt` is committed.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+      - name: install cargo-public-api
+        run: cargo install --locked cargo-public-api
+      - name: public-api diff
+        run: cargo public-api diff

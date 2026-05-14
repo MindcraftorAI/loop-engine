@@ -29,7 +29,7 @@ pub fn write_pid_file() -> Result<()> {
     if let Some(existing) = read_pid_file(&pid_path)? {
         if pid_is_alive(existing) {
             bail!(
-                "another loop-daemon is already running (pid={}, file={})",
+                "another loop-engine is already running (pid={}, file={})",
                 existing,
                 pid_path.display()
             );
@@ -130,7 +130,7 @@ pub fn pre_detach_checks() -> Result<()> {
     if let Some(existing) = read_pid_file(&pid_path)? {
         if pid_is_alive(existing) {
             bail!(
-                "another loop-daemon appears to be running (pid={}). Run `loop-daemon stop` first or remove {}",
+                "another loop-engine appears to be running (pid={}). Run `loop-engine stop` first or remove {}",
                 existing,
                 pid_path.display()
             );
@@ -151,11 +151,11 @@ pub async fn run_body(cfg: &DaemonConfig) -> Result<()> {
     info!(
         pid = std::process::id(),
         heartbeat_interval_secs = cfg.heartbeat_interval_secs,
-        "loop-daemon started"
+        "loop-engine started"
     );
     heartbeat_loop(cfg.heartbeat_interval_secs, shutdown).await;
     remove_pid_file()?;
-    info!("loop-daemon exited cleanly");
+    info!("loop-engine exited cleanly");
     Ok(())
 }
 
@@ -299,7 +299,7 @@ mod tests {
         );
         let msg = format!("{:#}", result.unwrap_err());
         assert!(
-            msg.contains("another loop-daemon"),
+            msg.contains("another loop-engine"),
             "expected refusal message, got: {msg}"
         );
     }
