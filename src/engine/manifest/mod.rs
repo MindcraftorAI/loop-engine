@@ -1145,4 +1145,113 @@ mod tests {
         assert_eq!(m.memories.len(), 1, "user-immune memory MUST still be discoverable");
         assert_eq!(m.memories[0].id, mid);
     }
+
+    /// Phase E audit A-M3: NEGATIVE control for the wedge-immunity
+    /// test above. Cross-phase pattern (B M3 / C M1 / D M1 / E M3 —
+    /// four phases of the same pattern). Without this negative
+    /// control, the positive test would pass equally in a bug-world
+    /// where `prune` is a no-op. This test proves prune DOES evict
+    /// uncited memories — so the positive test's survival of an
+    /// immune memory is meaningful.
+    #[tokio::test]
+    async fn wedge_negative_control_uncited_memory_is_pruned() {
+        use crate::engine::embedding::MockEmbedder;
+        use crate::engine::memory;
+        use crate::engine::vector::HnswVectorIndex;
+
+        let h = TestHarness::in_memory();
+        let dim = 4;
+        let embedder = MockEmbedder::new(dim).with_response(vec![vec![1.0, 0.0, 0.0, 0.0]]);
+        let vector_index = HnswVectorIndex::new(dim);
+        let mid = MemoryId::new("mem-uncited1");
+        memory::insert(
+            &h.ctx,
+            h.storage.as_ref(),
+            &embedder,
+            &vector_index,
+            mid.clone(),
+            "uncited memory",
+            "body",
+            now_t(),
+        )
+        .await
+        .unwrap();
+        // DELIBERATELY do NOT call `increment_citation_count` — the
+        // memory has no user-lesson citations, so the immunity guard
+        // does NOT apply.
+
+        let pred: crate::engine::memory::PrunePredicate = Box::new(|_fm| true);
+        let stats =
+            memory::prune(&h.ctx, h.storage.as_ref(), &vector_index, pred).await.unwrap();
+        assert_eq!(
+            stats.pruned, 1,
+            "uncited memory MUST be evicted by a prune-everything predicate"
+        );
+        assert_eq!(stats.skipped_user_immune, 0);
+        // Memory is GONE from storage.
+        let after = memory::get_by_id(&h.ctx, h.storage.as_ref(), &mid).await.unwrap();
+        assert!(after.is_none(), "memory should be deleted from storage");
+    }
+
+    /// Phase E audit A-C1 regression: the prune predicate must run
+    /// EXACTLY ONCE per memory, even when the memory is user-immune.
+    /// The previous implementation re-ran the predicate on a
+    /// falsified clone, causing stateful predicates to double-fire.
+    #[tokio::test]
+    async fn prune_predicate_runs_exactly_once_per_memory() {
+        use crate::engine::embedding::MockEmbedder;
+        use crate::engine::memory;
+        use crate::engine::vector::HnswVectorIndex;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let h = TestHarness::in_memory();
+        let dim = 4;
+        // Mixed set: 2 immune + 2 uncited.
+        for (id_str, cited) in [
+            ("mem-immune11", true),
+            ("mem-immune22", true),
+            ("mem-prune001", false),
+            ("mem-prune002", false),
+        ] {
+            let emb = MockEmbedder::new(dim).with_response(vec![vec![1.0, 0.0, 0.0, 0.0]]);
+            let vi = HnswVectorIndex::new(dim);
+            let mid = MemoryId::new(id_str);
+            memory::insert(
+                &h.ctx,
+                h.storage.as_ref(),
+                &emb,
+                &vi,
+                mid.clone(),
+                "x",
+                "y",
+                now_t(),
+            )
+            .await
+            .unwrap();
+            if cited {
+                memory::increment_citation_count(&h.ctx, h.storage.as_ref(), &mid)
+                    .await
+                    .unwrap();
+            }
+        }
+
+        // Counting predicate: increments a shared counter per call.
+        let counter = Arc::new(AtomicUsize::new(0));
+        let counter_clone = Arc::clone(&counter);
+        let pred: crate::engine::memory::PrunePredicate = Box::new(move |_fm| {
+            counter_clone.fetch_add(1, Ordering::Relaxed);
+            true
+        });
+
+        let vector_index = HnswVectorIndex::new(dim);
+        let _ = memory::prune(&h.ctx, h.storage.as_ref(), &vector_index, pred)
+            .await
+            .unwrap();
+        let call_count = counter.load(Ordering::Relaxed);
+        assert_eq!(
+            call_count, 4,
+            "predicate must run exactly once per memory; got {call_count} calls for 4 memories"
+        );
+    }
 }

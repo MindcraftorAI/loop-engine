@@ -29,15 +29,21 @@ pub use id::MemoryId;
 // within the engine; not part of the external API.
 pub use store::{
     delete, get_by_id, get_by_id_with_embedding, increment_citation_count, insert, prune,
-    search,
+    recompute_citation_counts, search, RecomputeStats,
 };
 
 /// YAML frontmatter for a memory file on disk. Mirrors
 /// [`crate::engine::yaml::LessonFrontmatter`] for symmetry.
 ///
-/// `#[non_exhaustive]` so future cycles can add fields without a SemVer
-/// break. External callers should construct via [`Self::new`] +
-/// builder methods.
+/// **NOT `#[non_exhaustive]`** — deliberately, per D-E1. This type
+/// IS the serialized YAML shape, and `#[non_exhaustive]` would block
+/// struct-literal construction from integration tests that need to
+/// hand-build fixtures. Backwards-compatible growth is achieved
+/// instead via `#[serde(default)]` on additive fields — TS-shaped
+/// memories without a new field deserialize cleanly. The audit
+/// trade-off (B-m2) accepts looser SemVer durability on this shape
+/// in exchange for the test ergonomics; future cycles that need
+/// stricter SemVer can revisit.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MemoryFrontmatter {
     pub id: MemoryId,

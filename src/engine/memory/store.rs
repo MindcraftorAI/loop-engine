@@ -30,8 +30,7 @@ use crate::engine::context::Context;
 use crate::engine::embedding::Embedder;
 use crate::engine::error::EngineError;
 use crate::engine::memory::{
-    guarded_predicate, Memory, MemoryFrontmatter, MemoryId, MemoryQuery, MemoryRef,
-    PrunePredicate, PruneStats,
+    Memory, MemoryFrontmatter, MemoryId, MemoryQuery, MemoryRef, PrunePredicate, PruneStats,
 };
 use crate::engine::storage::{Storage, StorageKey};
 use crate::engine::vector::{SearchHit, VectorIndex};
@@ -255,16 +254,44 @@ pub async fn search(
 /// tombstones the entry in the vector index. Idempotent — deleting
 /// an absent id is `Ok(())`.
 ///
-/// NOTE: `delete` bypasses the user-lesson-immunity guard. It is
-/// intended for explicit user-initiated removal (via `loop forget` /
-/// MCP tool / etc); auto-prune callers MUST use [`prune`] which
-/// enforces immunity.
+/// **User-immunity respected by default** (audit A-M2 fix). When
+/// `force = false` (the engine-initiated path), this function
+/// checks `consumed_by_user_lessons` and returns
+/// [`EngineError::UserMemoryImmune`] if the memory is cited by a
+/// user-authored lesson — matching the
+/// `feedback_user_authored_lessons_immune.md` invariant. Engine-
+/// initiated auto-cleanup paths (TTL sweep, LLM-driven cleanup) MUST
+/// pass `force = false`.
+///
+/// User-initiated removal (explicit `loop forget` / MCP tool call)
+/// passes `force = true` to bypass the guard — this is exactly the
+/// "unless user changes his/her mind" case the principle allows for.
+///
+/// Returns `Ok(())` for an absent id regardless of `force`.
 pub async fn delete(
     ctx: &Context,
     storage: &dyn Storage,
     vector_index: &dyn VectorIndex,
     id: &MemoryId,
+    force: bool,
 ) -> Result<(), EngineError> {
+    if !force {
+        // Engine-initiated path: respect immunity. Load the
+        // frontmatter to check the counter. If absent, fall through
+        // to the idempotent-delete path.
+        let md_key = StorageKey::memory(ctx, id.as_str());
+        if let Some(bytes) = storage.get(&md_key).await? {
+            let (fm, _body) = parse_memory_file(&bytes)?;
+            if fm.consumed_by_user_lessons > 0 {
+                return Err(EngineError::UserMemoryImmune {
+                    id: id.as_str().to_string(),
+                    cited_by: fm.consumed_by_user_lessons,
+                });
+            }
+        }
+    }
+    // force=true (user-initiated) OR force=false on a non-immune
+    // memory: proceed with the delete.
     let md_key = StorageKey::memory(ctx, id.as_str());
     let v_key = vec_key(ctx, id);
     storage.delete(&md_key).await?;
@@ -273,13 +300,19 @@ pub async fn delete(
     Ok(())
 }
 
-/// Prune memories matching `predicate`. The engine wraps `predicate`
-/// with the user-lesson-immunity guard (D-E9): a memory whose
+/// Prune memories matching `predicate`. The engine enforces the
+/// user-lesson-immunity guard (D-E9): a memory whose
 /// `consumed_by_user_lessons > 0` is ALWAYS skipped, even if the
 /// predicate matched. `PruneStats::skipped_user_immune` counts these.
 ///
 /// Predicate runs over `&MemoryFrontmatter` only (not the body or
-/// embedding) — cheap to evaluate per memory.
+/// embedding) — cheap to evaluate per memory. The predicate is
+/// invoked EXACTLY ONCE PER MEMORY against the real frontmatter
+/// (audit A-C1 fix): stateful predicates and predicates that
+/// inspect `consumed_by_user_lessons` get correct attribution. The
+/// previous implementation re-ran the predicate on a falsified clone
+/// to detect the immunity-skip case, which double-fired side effects
+/// and could mis-attribute skip-vs-no-match outcomes.
 pub async fn prune(
     ctx: &Context,
     storage: &dyn Storage,
@@ -293,8 +326,6 @@ pub async fn prune(
     };
     let prefix = StorageKey::memories_prefix(ctx);
     let keys = storage.list(&prefix).await?;
-    // Engine-internal: wrap the user predicate with the immunity guard.
-    let guarded = guarded_predicate(predicate);
 
     for key in keys {
         // Skip .vec sidecars; we operate on .md frontmatter files.
@@ -314,48 +345,32 @@ pub async fn prune(
         };
         stats.examined += 1;
 
-        // First: check the unguarded predicate to count what WOULD
-        // have matched if not for the user-immunity rule.
-        // We need to evaluate the predicate twice (cheap, all
-        // in-memory) to distinguish skipped-by-immunity from
-        // not-matched.
-        //
-        // Trick: `guarded` returns true ONLY when predicate AND
-        // counter == 0. So:
-        //   - guarded(fm) == true: prune.
-        //   - guarded(fm) == false AND counter > 0 AND original
-        //     predicate would have matched: skipped_user_immune.
-        //   - otherwise: not a match.
-        //
-        // To detect the immunity-skip case without re-running the
-        // user predicate, we use the counter directly: if the
-        // counter is > 0, the immunity guard is the relevant
-        // blocker, so check whether the user predicate WOULD have
-        // matched.
-        let counter_blocks = fm.consumed_by_user_lessons > 0;
-        if guarded(&fm) {
-            // Prune: remove md + vec + vector index entry.
-            let id = fm.id.clone();
-            let md_key = StorageKey::memory(ctx, id.as_str());
-            storage.delete(&md_key).await?;
-            storage.delete(&vec_key(ctx, &id)).await?;
-            vector_index.delete(ctx, &id).await?;
-            stats.pruned += 1;
-        } else if counter_blocks {
-            // The counter is what's blocking. Did the user predicate
-            // alone match? We can't tell without re-running it
-            // unguarded. Re-derive by constructing an unguarded
-            // probe: temporarily zero the counter on a CLONE of the
-            // frontmatter and re-evaluate via the guarded predicate.
-            let mut probe = fm.clone();
-            probe.consumed_by_user_lessons = 0;
-            if guarded(&probe) {
+        // Audit A-C1 fix: invoke predicate ONCE on the real
+        // frontmatter; check immunity separately. No predicate
+        // re-evaluation on a falsified clone.
+        let pred_matched = predicate(&fm);
+        let immune = fm.consumed_by_user_lessons > 0;
+        match (pred_matched, immune) {
+            (true, false) => {
+                // Prune: remove md + vec + vector index entry.
+                let id = fm.id.clone();
+                let md_key = StorageKey::memory(ctx, id.as_str());
+                storage.delete(&md_key).await?;
+                storage.delete(&vec_key(ctx, &id)).await?;
+                vector_index.delete(ctx, &id).await?;
+                stats.pruned += 1;
+            }
+            (true, true) => {
                 stats.skipped_user_immune += 1;
                 warn!(
                     id = %fm.id,
                     cited_by = fm.consumed_by_user_lessons,
                     "prune: skipping user-immune memory"
                 );
+            }
+            (false, _) => {
+                // Predicate didn't match. Whether the memory is
+                // immune is irrelevant; it stays.
             }
         }
     }
@@ -431,6 +446,181 @@ pub(crate) async fn decrement_citation_count(
 
 fn now_iso() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+}
+
+/// Phase E D-E8 drift escape hatch — bounded-cost integrity-restore
+/// for the `consumed_by_user_lessons` counter. Scans ALL lessons
+/// (across every status dir), counts `EvidenceRef::Memory(_)`
+/// occurrences per memory id from user-authored lessons (only), and
+/// rewrites each memory's counter via CAS-RMW to match the ground
+/// truth.
+///
+/// When to call: on daemon startup as a self-heal, or as an explicit
+/// `loop repair memory-counters` CLI command. Engine ships the
+/// function; host triggers on schedule. Bounded cost — O(L + M)
+/// where L = total lesson count, M = touched memory count. Each
+/// counter write is a single CAS-RMW round.
+///
+/// Returns a `RecomputeStats` describing the outcome: lessons
+/// scanned, memories touched, deltas (counters that DIFFERED from
+/// the recomputed value and were rewritten). Drift > 0 indicates
+/// the live state was wrong; the function repaired it.
+pub async fn recompute_citation_counts(
+    ctx: &Context,
+    storage: &dyn Storage,
+) -> Result<RecomputeStats, EngineError> {
+    use std::collections::HashMap;
+
+    let mut stats = RecomputeStats {
+        lessons_scanned: 0,
+        memories_recomputed: 0,
+        counters_repaired: 0,
+    };
+
+    // 1. Walk all lesson status directories, accumulate citation
+    //    counts per memory id from user-authored lessons.
+    let mut counts: HashMap<MemoryId, u32> = HashMap::new();
+    for status in crate::engine::paths::LESSON_STATUS_DIRS {
+        let prefix = StorageKey::lesson_status_prefix(ctx, status);
+        let keys = storage.list(&prefix).await?;
+        for key in keys {
+            if !key.as_str().ends_with(".md") {
+                continue;
+            }
+            let bytes = match storage.get(&key).await? {
+                Some(b) => b,
+                None => continue,
+            };
+            stats.lessons_scanned += 1;
+            let content = match std::str::from_utf8(&bytes) {
+                Ok(s) => s,
+                Err(e) => {
+                    warn!(
+                        key = %key, error = %e,
+                        "recompute: skipping lesson with non-UTF8 bytes"
+                    );
+                    continue;
+                }
+            };
+            let split = match split_frontmatter_normalized(content) {
+                Ok(s) => s,
+                Err(e) => {
+                    warn!(
+                        key = %key, error = %e,
+                        "recompute: skipping lesson with bad frontmatter"
+                    );
+                    continue;
+                }
+            };
+            let fm: crate::engine::yaml::LessonFrontmatter =
+                match crate::engine::yaml::reader::parse_lesson_frontmatter(&split.yaml) {
+                    Ok(fm) => fm,
+                    Err(e) => {
+                        warn!(
+                            key = %key, error = %e,
+                            "recompute: skipping unparseable lesson"
+                        );
+                        continue;
+                    }
+                };
+            // Only user-authored lessons drive immunity.
+            if !fm.authored_by.is_user() {
+                continue;
+            }
+            if let Some(cn) = &fm.causal_narrative {
+                for evr in &cn.evidence_refs {
+                    if let Some(mid) = evr.as_memory_id() {
+                        *counts.entry(mid.clone()).or_insert(0) += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. Walk all memories. For each, the EXPECTED counter is
+    //    `counts.get(id).copied().unwrap_or(0)`. If the on-disk
+    //    counter differs, CAS-rewrite it to the expected value.
+    let mem_prefix = StorageKey::memories_prefix(ctx);
+    let mem_keys = storage.list(&mem_prefix).await?;
+    for key in mem_keys {
+        if !key.as_str().ends_with(".md") {
+            continue;
+        }
+        let bytes = match storage.get(&key).await? {
+            Some(b) => b,
+            None => continue,
+        };
+        let (fm, _body) = match parse_memory_file(&bytes) {
+            Ok(parsed) => parsed,
+            Err(e) => {
+                warn!(
+                    key = %key, error = %e,
+                    "recompute: skipping unparseable memory"
+                );
+                continue;
+            }
+        };
+        stats.memories_recomputed += 1;
+        let expected = counts.get(&fm.id).copied().unwrap_or(0);
+        if fm.consumed_by_user_lessons != expected {
+            // Drift detected. Repair via CAS-RMW.
+            set_citation_count(ctx, storage, &fm.id, expected).await?;
+            stats.counters_repaired += 1;
+            warn!(
+                id = %fm.id,
+                was = fm.consumed_by_user_lessons,
+                now = expected,
+                "recompute: repaired drifted citation counter"
+            );
+        }
+    }
+    Ok(stats)
+}
+
+/// Internal helper for `recompute_citation_counts`: CAS-rewrite the
+/// counter to `target`. Same 5-retry budget as
+/// `increment_citation_count`.
+async fn set_citation_count(
+    ctx: &Context,
+    storage: &dyn Storage,
+    id: &MemoryId,
+    target: u32,
+) -> Result<(), EngineError> {
+    let key = StorageKey::memory(ctx, id.as_str());
+    for _attempt in 0..CITATION_CAS_MAX_RETRIES {
+        let Some((bytes, version)) = storage.get_with_version(&key).await? else {
+            return Ok(());
+        };
+        let (mut fm, body) = parse_memory_file(&bytes)?;
+        if fm.consumed_by_user_lessons == target {
+            return Ok(()); // already correct, no write needed
+        }
+        fm.consumed_by_user_lessons = target;
+        fm.updated_at = Some(now_iso());
+        let new_yaml = render_memory_yaml(&fm, &body)?;
+        let written = storage
+            .put_if_version(&key, Bytes::from(new_yaml), Some(&version))
+            .await?;
+        if written {
+            return Ok(());
+        }
+    }
+    Err(EngineError::CasContended {
+        key: key.as_str().to_string(),
+        retries: CITATION_CAS_MAX_RETRIES,
+    })
+}
+
+/// Stats from a [`recompute_citation_counts`] sweep.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct RecomputeStats {
+    pub lessons_scanned: usize,
+    pub memories_recomputed: usize,
+    /// Counters that DIFFERED from ground truth and were repaired.
+    /// Drift > 0 means the live state was wrong. Healthy systems
+    /// run with drift = 0.
+    pub counters_repaired: usize,
 }
 
 #[cfg(test)]
@@ -580,12 +770,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn delete_removes_md_vec_and_tombstones_index() {
+    async fn delete_force_true_removes_md_vec_and_tombstones_index() {
         let (storage, embedder, vector_index, now) = fresh_setup().await;
         let embedder = embedder.with_response(vec![unit_vec(4, 0)]);
         let id = MemoryId::new("mem-aaaaaaaa");
         insert(&ctx(), storage.as_ref(), &embedder, &vector_index, id.clone(), "x", "y", now).await.unwrap();
-        delete(&ctx(), storage.as_ref(), &vector_index, &id).await.unwrap();
+        delete(&ctx(), storage.as_ref(), &vector_index, &id, true).await.unwrap();
 
         // .md gone.
         assert!(storage.get(&StorageKey::memory(&ctx(), id.as_str())).await.unwrap().is_none());
@@ -676,6 +866,93 @@ mod tests {
         }
         let loaded = get_by_id(&ctx(), storage.as_ref(), &id).await.unwrap().unwrap();
         assert_eq!(loaded.frontmatter.consumed_by_user_lessons, 0, "saturate at 0");
+    }
+
+    #[tokio::test]
+    async fn delete_force_false_blocks_when_memory_is_user_immune() {
+        // Audit A-M2 regression: engine-initiated delete (force=false)
+        // must refuse a user-cited memory.
+        let (storage, embedder, vector_index, now) = fresh_setup().await;
+        let embedder = embedder.with_response(vec![unit_vec(4, 0)]);
+        let id = MemoryId::new("mem-immunedl");
+        insert(&ctx(), storage.as_ref(), &embedder, &vector_index, id.clone(), "x", "y", now).await.unwrap();
+        increment_citation_count(&ctx(), storage.as_ref(), &id).await.unwrap();
+        let r = delete(&ctx(), storage.as_ref(), &vector_index, &id, false).await;
+        match r {
+            Err(EngineError::UserMemoryImmune { id: ref returned_id, cited_by: 1 }) => {
+                assert_eq!(returned_id, "mem-immunedl");
+            }
+            other => panic!("expected UserMemoryImmune, got {other:?}"),
+        }
+        // Memory still in storage.
+        assert!(
+            get_by_id(&ctx(), storage.as_ref(), &id).await.unwrap().is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_force_true_bypasses_immunity() {
+        // User-initiated path: force=true succeeds even on immune memory.
+        let (storage, embedder, vector_index, now) = fresh_setup().await;
+        let embedder = embedder.with_response(vec![unit_vec(4, 0)]);
+        let id = MemoryId::new("mem-forcedel");
+        insert(&ctx(), storage.as_ref(), &embedder, &vector_index, id.clone(), "x", "y", now).await.unwrap();
+        increment_citation_count(&ctx(), storage.as_ref(), &id).await.unwrap();
+        delete(&ctx(), storage.as_ref(), &vector_index, &id, true).await.unwrap();
+        assert!(get_by_id(&ctx(), storage.as_ref(), &id).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn delete_force_false_succeeds_on_uncited_memory() {
+        // No user citation → engine-initiated delete proceeds.
+        let (storage, embedder, vector_index, now) = fresh_setup().await;
+        let embedder = embedder.with_response(vec![unit_vec(4, 0)]);
+        let id = MemoryId::new("mem-uncited3");
+        insert(&ctx(), storage.as_ref(), &embedder, &vector_index, id.clone(), "x", "y", now).await.unwrap();
+        delete(&ctx(), storage.as_ref(), &vector_index, &id, false).await.unwrap();
+        assert!(get_by_id(&ctx(), storage.as_ref(), &id).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn delete_idempotent_for_absent_id_regardless_of_force() {
+        let (storage, _, vector_index, _) = fresh_setup().await;
+        let absent = MemoryId::new("mem-noexist1");
+        delete(&ctx(), storage.as_ref(), &vector_index, &absent, false).await.unwrap();
+        delete(&ctx(), storage.as_ref(), &vector_index, &absent, true).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn recompute_citation_counts_repairs_drift_to_zero() {
+        // Memory has counter > 0 on disk but no user-authored lessons
+        // cite it. Recompute should set the counter back to 0.
+        let (storage, embedder, vector_index, now) = fresh_setup().await;
+        let embedder = embedder.with_response(vec![unit_vec(4, 0)]);
+        let id = MemoryId::new("mem-drift01");
+        insert(&ctx(), storage.as_ref(), &embedder, &vector_index, id.clone(), "x", "y", now).await.unwrap();
+        // Artificially inflate the counter without a citing lesson.
+        increment_citation_count(&ctx(), storage.as_ref(), &id).await.unwrap();
+        increment_citation_count(&ctx(), storage.as_ref(), &id).await.unwrap();
+        let before = get_by_id(&ctx(), storage.as_ref(), &id).await.unwrap().unwrap();
+        assert_eq!(before.frontmatter.consumed_by_user_lessons, 2);
+
+        let stats = recompute_citation_counts(&ctx(), storage.as_ref()).await.unwrap();
+        // No lessons → 0 scanned. 1 memory inspected. 1 counter repaired.
+        assert_eq!(stats.lessons_scanned, 0);
+        assert_eq!(stats.memories_recomputed, 1);
+        assert_eq!(stats.counters_repaired, 1);
+        // Counter is now 0.
+        let after = get_by_id(&ctx(), storage.as_ref(), &id).await.unwrap().unwrap();
+        assert_eq!(after.frontmatter.consumed_by_user_lessons, 0);
+    }
+
+    #[tokio::test]
+    async fn recompute_citation_counts_noop_when_state_is_consistent() {
+        // Empty storage → zero everything, zero repairs.
+        let (storage, _, _, _) = fresh_setup().await;
+        let stats = recompute_citation_counts(&ctx(), storage.as_ref()).await.unwrap();
+        assert_eq!(stats.lessons_scanned, 0);
+        assert_eq!(stats.memories_recomputed, 0);
+        assert_eq!(stats.counters_repaired, 0);
     }
 
     #[tokio::test]

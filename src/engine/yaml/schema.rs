@@ -324,3 +324,175 @@ pub struct LessonFrontmatter {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub updated_at: Option<String>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ---- EvidenceRef migrate-on-load + tagged-write round-trip ----
+
+    #[test]
+    fn evidence_ref_deserialize_legacy_plain_string_becomes_quote() {
+        let json = r#""some free-text quote""#;
+        let r: EvidenceRef = serde_json::from_str(json).unwrap();
+        match r {
+            EvidenceRef::Quote(s) => assert_eq!(s, "some free-text quote"),
+            other => panic!("expected Quote variant, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn evidence_ref_deserialize_tagged_quote_form() {
+        let json = r#"{"quote": "tagged quote text"}"#;
+        let r: EvidenceRef = serde_json::from_str(json).unwrap();
+        match r {
+            EvidenceRef::Quote(s) => assert_eq!(s, "tagged quote text"),
+            other => panic!("expected Quote variant, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn evidence_ref_deserialize_tagged_memory_form() {
+        let json = r#"{"memory": "mem-aaaaaaaa"}"#;
+        let r: EvidenceRef = serde_json::from_str(json).unwrap();
+        match r {
+            EvidenceRef::Memory(id) => assert_eq!(id.as_str(), "mem-aaaaaaaa"),
+            other => panic!("expected Memory variant, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn evidence_ref_serialize_quote_emits_tagged_form() {
+        let r = EvidenceRef::Quote("hello".to_string());
+        let s = serde_json::to_string(&r).unwrap();
+        assert_eq!(s, r#"{"quote":"hello"}"#);
+    }
+
+    #[test]
+    fn evidence_ref_serialize_memory_emits_tagged_form() {
+        let r = EvidenceRef::Memory(crate::engine::memory::MemoryId::new("mem-abc12345"));
+        let s = serde_json::to_string(&r).unwrap();
+        assert_eq!(s, r#"{"memory":"mem-abc12345"}"#);
+    }
+
+    #[test]
+    fn evidence_ref_round_trip_quote() {
+        let original = EvidenceRef::Quote("a quote with \"nested\" marks".to_string());
+        let s = serde_json::to_string(&original).unwrap();
+        let back: EvidenceRef = serde_json::from_str(&s).unwrap();
+        assert_eq!(original, back);
+    }
+
+    #[test]
+    fn evidence_ref_round_trip_memory() {
+        let original =
+            EvidenceRef::Memory(crate::engine::memory::MemoryId::new("mem-roundtrip"));
+        let s = serde_json::to_string(&original).unwrap();
+        let back: EvidenceRef = serde_json::from_str(&s).unwrap();
+        assert_eq!(original, back);
+    }
+
+    #[test]
+    fn evidence_ref_deserialize_unknown_tag_errors() {
+        let json = r#"{"unknown_variant": "value"}"#;
+        let r: Result<EvidenceRef, _> = serde_json::from_str(json);
+        assert!(r.is_err(), "unknown variant tag must reject");
+    }
+
+    #[test]
+    fn evidence_ref_legacy_vec_strings_in_causal_narrative() {
+        // The migrate-on-load path: a TS-shaped lesson with
+        // `evidence_refs: ["quote1", "quote2"]` must deserialize
+        // cleanly as Vec<EvidenceRef> with each string wrapped as
+        // Quote(_).
+        let yaml = r#"
+trigger: "t"
+failure_mode: "fm"
+correction: "c"
+confidence: "inferred"
+evidence_refs:
+  - "first quote"
+  - "second quote"
+generated_by: "llm"
+generated_at: "2026-05-14T00:00:00Z"
+"#;
+        let cn: CausalNarrative = serde_yml::from_str(yaml).unwrap();
+        assert_eq!(cn.evidence_refs.len(), 2);
+        assert_eq!(cn.evidence_refs[0], EvidenceRef::Quote("first quote".into()));
+        assert_eq!(cn.evidence_refs[1], EvidenceRef::Quote("second quote".into()));
+    }
+
+    #[test]
+    fn evidence_ref_as_str_works_for_both_variants() {
+        let q = EvidenceRef::Quote("hi".to_string());
+        let m = EvidenceRef::Memory(crate::engine::memory::MemoryId::new("mem-x"));
+        assert_eq!(q.as_str(), "hi");
+        assert_eq!(m.as_str(), "mem-x");
+    }
+
+    #[test]
+    fn evidence_ref_helpers_is_memory_and_as_memory_id() {
+        let q = EvidenceRef::Quote("x".into());
+        let m = EvidenceRef::Memory(crate::engine::memory::MemoryId::new("mem-a"));
+        assert!(!q.is_memory());
+        assert!(m.is_memory());
+        assert!(q.as_memory_id().is_none());
+        assert_eq!(m.as_memory_id().map(|i| i.as_str()), Some("mem-a"));
+    }
+
+    // ---- Authorship default + serde ----
+
+    #[test]
+    fn authorship_default_is_llm() {
+        assert_eq!(Authorship::default(), Authorship::Llm);
+    }
+
+    #[test]
+    fn authorship_is_user_predicate() {
+        assert!(Authorship::User.is_user());
+        assert!(!Authorship::Llm.is_user());
+        assert!(!Authorship::AutoMemory.is_user());
+        assert!(!Authorship::EccInstinct.is_user());
+        assert!(!Authorship::Unknown.is_user());
+    }
+
+    #[test]
+    fn authorship_serde_uses_snake_case() {
+        let cases = [
+            (Authorship::User, r#""user""#),
+            (Authorship::Llm, r#""llm""#),
+            (Authorship::AutoMemory, r#""auto_memory""#),
+            (Authorship::EccInstinct, r#""ecc_instinct""#),
+            (Authorship::Unknown, r#""unknown""#),
+        ];
+        for (variant, expected) in cases {
+            let s = serde_json::to_string(&variant).unwrap();
+            assert_eq!(s, expected, "serialize {variant:?}");
+            let back: Authorship = serde_json::from_str(expected).unwrap();
+            assert_eq!(back, variant, "deserialize {expected}");
+        }
+    }
+
+    #[test]
+    fn authorship_as_str_matches_serde_form() {
+        assert_eq!(Authorship::User.as_str(), "user");
+        assert_eq!(Authorship::Llm.as_str(), "llm");
+        assert_eq!(Authorship::AutoMemory.as_str(), "auto_memory");
+        assert_eq!(Authorship::EccInstinct.as_str(), "ecc_instinct");
+        assert_eq!(Authorship::Unknown.as_str(), "unknown");
+    }
+
+    #[test]
+    fn lesson_frontmatter_default_authored_by_when_field_missing() {
+        // TS-shaped lessons predate `authored_by`. `#[serde(default)]`
+        // should fall back to `Authorship::Llm`.
+        let yaml = r#"
+id: "les-test1234"
+description: "test"
+status: "active"
+created_at: "2026-05-14T00:00:00Z"
+"#;
+        let fm: LessonFrontmatter = serde_yml::from_str(yaml).unwrap();
+        assert_eq!(fm.authored_by, Authorship::Llm);
+    }
+}

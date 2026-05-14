@@ -73,6 +73,20 @@ pub enum EngineError {
     #[error("vector index error: {0}")]
     VectorIndex(#[source] VectorIndexError),
 
+    /// Engine-initiated delete refused because the memory is cited
+    /// by one or more user-authored lessons — the user-immunity
+    /// invariant from
+    /// `feedback_user_authored_lessons_immune.md`. Surfaces from
+    /// `memory::delete(..., force = false)`. Engine-initiated paths
+    /// (auto-cleanup, TTL sweep) MUST pass `force = false` and
+    /// handle this error. User-initiated paths (explicit "forget")
+    /// pass `force = true` to bypass.
+    #[error(
+        "user-memory immune: memory {id} is cited by {cited_by} user-authored lesson(s) — \
+         use force=true to bypass"
+    )]
+    UserMemoryImmune { id: String, cited_by: u32 },
+
     /// `narrative::generate` rejected the LLM output as too thin to
     /// ground (the model returned a refusal indicating the inputs
     /// don't justify any concrete causal narrative). Distinct from
