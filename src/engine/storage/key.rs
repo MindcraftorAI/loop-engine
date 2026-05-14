@@ -63,6 +63,41 @@ impl StorageKey {
         Self(prefixed(ctx, "memories"))
     }
 
+    /// Skill file (Phase F). Directory-per-skill matches Claude
+    /// convention + allows future multi-file skills.
+    /// Single-user: `skills/<id>/SKILL.md`.
+    pub fn skill(ctx: &Context, id: &str) -> Self {
+        let suffix = format!("skills/{id}/SKILL.md");
+        Self(prefixed(ctx, &suffix))
+    }
+
+    /// Prefix key for listing all skills.
+    pub fn skills_prefix(ctx: &Context) -> Self {
+        Self(prefixed(ctx, "skills"))
+    }
+
+    /// Persona file (Phase F). `personas/<id>/PERSONA.md`.
+    pub fn persona(ctx: &Context, id: &str) -> Self {
+        let suffix = format!("personas/{id}/PERSONA.md");
+        Self(prefixed(ctx, &suffix))
+    }
+
+    /// Prefix key for listing all personas.
+    pub fn personas_prefix(ctx: &Context) -> Self {
+        Self(prefixed(ctx, "personas"))
+    }
+
+    /// Team file (Phase F). `teams/<id>/TEAM.md`.
+    pub fn team(ctx: &Context, id: &str) -> Self {
+        let suffix = format!("teams/{id}/TEAM.md");
+        Self(prefixed(ctx, &suffix))
+    }
+
+    /// Prefix key for listing all teams.
+    pub fn teams_prefix(ctx: &Context) -> Self {
+        Self(prefixed(ctx, "teams"))
+    }
+
     /// Prefix key for listing all lessons in a given status directory.
     /// Used by Day 17 solicitor for scan-by-status. Single-user:
     /// `lessons/<status>`; multi-tenant: `tenants/.../lessons/<status>`.

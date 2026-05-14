@@ -29,6 +29,9 @@ pub mod store;
 
 pub use compress::{compress, CompressionConfig, CompressionWindow};
 pub use id::MemoryId;
+pub use scope::{MemoryScope, MemoryScopeFilter};
+
+pub mod scope;
 // Phase E2 audit B-M2 extraction: chase + recompute live in
 // `lifecycle.rs`. Re-exported here so existing call sites continue
 // to work via `memory::recompute_citation_counts` etc.
@@ -73,6 +76,11 @@ pub struct MemoryFrontmatter {
     /// (D-E1 — shape ships in Phase E, consumer ships later).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub derived_from: Vec<MemoryId>,
+    /// Phase F D-F8: scope tag. Default `MemoryScope::User`. The
+    /// user-immunity invariant is SCOPE-ORTHOGONAL (cited memories
+    /// stay immune regardless of scope).
+    #[serde(default)]
+    pub scope: MemoryScope,
 }
 
 impl MemoryFrontmatter {
@@ -90,6 +98,7 @@ impl MemoryFrontmatter {
             updated_at: None,
             consumed_by_user_lessons: 0,
             derived_from: Vec::new(),
+            scope: MemoryScope::default(),
         }
     }
 }

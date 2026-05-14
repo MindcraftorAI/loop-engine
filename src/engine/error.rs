@@ -116,6 +116,29 @@ pub enum EngineError {
         in_chain_with: Vec<String>,
     },
 
+    /// Phase F: engine-initiated archive/delete refused because the
+    /// skill is user-authored (cascades from
+    /// `feedback_user_authored_lessons_immune.md` — only the user
+    /// can retire a user-authored skill).
+    #[error(
+        "user-skill immune: skill {id} is user-authored — use force=true to bypass"
+    )]
+    UserSkillImmune { id: String, has_user_lessons: bool },
+
+    /// Phase F: engine-initiated archive/delete refused — user-authored persona.
+    #[error("user-persona immune: persona {id} is user-authored — use force=true to bypass")]
+    UserPersonaImmune { id: String },
+
+    /// Phase F: engine-initiated archive/delete refused — user-authored team.
+    #[error("user-team immune: team {id} is user-authored — use force=true to bypass")]
+    UserTeamImmune { id: String },
+
+    /// Phase F + Phase E2: compression refused because predecessors
+    /// have mixed `MemoryScope` values — crossing a scope boundary
+    /// in a compressed memory would violate the privacy invariant.
+    #[error("compression scope mismatch: predecessors span multiple scopes: {window:?}")]
+    CompressionScopeMismatch { window: Vec<String> },
+
     /// `narrative::generate` rejected the LLM output as too thin to
     /// ground (the model returned a refusal indicating the inputs
     /// don't justify any concrete causal narrative). Distinct from

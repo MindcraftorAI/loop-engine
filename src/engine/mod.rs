@@ -21,6 +21,9 @@ pub mod llm;
 pub mod manifest;
 pub mod memory;
 pub mod paths;
+pub mod personas;
+pub mod skills;
+pub mod teams;
 pub mod pid;
 pub mod sentiment;
 pub mod storage;
@@ -63,8 +66,15 @@ pub use memory::{
     insert as insert_memory, prune as prune_memories,
     recompute_citation_counts as recompute_memory_citation_counts,
     search as search_memories, CompressionConfig, CompressionWindow, Memory, MemoryFrontmatter,
-    MemoryId, MemoryQuery, MemoryRef, PrunePredicate, PruneStats, RecomputeStats,
+    MemoryId, MemoryQuery, MemoryRef, MemoryScope, MemoryScopeFilter, PrunePredicate,
+    PruneStats, RecomputeStats,
 };
+pub use personas::{Persona, PersonaFrontmatter, PersonaRef, PersonaStatus};
+pub use skills::{
+    ActivationMode, ContextMode, EffortLevel, HookEvent, HookHandler, HookMatcherGroup,
+    Skill, SkillFrontmatter, SkillRef, SkillStatus, SkillType,
+};
+pub use teams::{Team, TeamFrontmatter, TeamMember, TeamRef, TeamStatus};
 pub use storage::{
     LocalFsStorage, MemoryStorage, Storage, StorageError, StorageKey, StorageMetadata, Version,
 };
