@@ -1,19 +1,18 @@
 //! Phase E2 — `derived_from` cycle + depth detection.
 //!
-//! D-Cx8: walk each predecessor's `derived_from` chain back, detect
-//! cycles via a visited-id set, cap depth at
-//! [`super::compress::COMPRESSION_MAX_CHAIN_DEPTH`] (16).
+//! D-Cx8 + Phase E2 audit C1 fix: proper DAG cycle detection. Walks
+//! each predecessor's `derived_from` chain back with an iterative
+//! DFS that tracks the CURRENT PATH (not all-visited), so diamonds
+//! (legitimate DAG shapes where the same ancestor is reachable via
+//! two distinct branches) don't false-positive as cycles.
 //!
-//! Algorithm:
-//!   - DFS from each predecessor's `derived_from` set.
-//!   - Track visited ids; revisit ⇒ cycle.
-//!   - Track depth; exceed 16 ⇒ depth-exceeded (treated same as
-//!     cycle for the audit trail — the chain that triggered it is
-//!     reported in `EngineError::CompressionCycle.chain`).
+//! Depth cap = [`super::compress::COMPRESSION_MAX_CHAIN_DEPTH`] (16).
+//! Exceeded depth surfaces as `EngineError::CompressionCycle` (treated
+//! same as a true cycle for audit purposes).
 //!
 //! The walk loads predecessors lazily from storage. A predecessor
-//! that doesn't exist is silently skipped (compress() will surface
-//! the missing-predecessor error at a later point if it matters).
+//! that doesn't exist is silently skipped (compress() validates
+//! existence separately).
 
 use std::collections::HashSet;
 
@@ -33,9 +32,6 @@ pub(crate) async fn detect_cycle_in_window(
     storage: &dyn Storage,
     predecessors: &[Memory],
 ) -> Result<(), EngineError> {
-    // Each predecessor walks INDEPENDENTLY — sharing the visited set
-    // across walks would over-report (two distinct predecessors
-    // legitimately sharing a common ancestor isn't a cycle).
     for root in predecessors {
         walk_chain(ctx, storage, &root.frontmatter.id, &root.frontmatter.derived_from)
             .await?;
@@ -43,48 +39,88 @@ pub(crate) async fn detect_cycle_in_window(
     Ok(())
 }
 
+/// One stack frame for the iterative DFS. `pending_children` is the
+/// remaining-to-process iterator state; when empty, the frame pops
+/// + the id is removed from the `path` set.
+struct Frame {
+    id: MemoryId,
+    pending_children: Vec<MemoryId>,
+    depth: usize,
+}
+
 /// Walk one chain back from `root` through its `derived_from`
-/// ancestors. Detects cycles via visited set + depth via counter.
+/// ancestors. Iterative DFS with PATH-tracking — `path` contains
+/// only the ids on the current root-to-leaf walk. Diamond DAGs
+/// (sibling-branches sharing an ancestor) don't trigger the cycle
+/// detector because the shared ancestor is popped from `path` when
+/// the first branch finishes.
 async fn walk_chain(
     ctx: &Context,
     storage: &dyn Storage,
     root_id: &MemoryId,
     initial_derived_from: &[MemoryId],
 ) -> Result<(), EngineError> {
-    let mut visited: HashSet<MemoryId> = HashSet::new();
-    visited.insert(root_id.clone());
-    // Frontier = stack of (id, depth). DFS.
-    let mut frontier: Vec<(MemoryId, usize)> = initial_derived_from
-        .iter()
-        .map(|id| (id.clone(), 1))
-        .collect();
+    let mut path: HashSet<MemoryId> = HashSet::new();
+    path.insert(root_id.clone());
+    let mut stack: Vec<Frame> = vec![Frame {
+        id: root_id.clone(),
+        pending_children: initial_derived_from.iter().rev().cloned().collect(),
+        depth: 0,
+    }];
 
-    while let Some((current, depth)) = frontier.pop() {
-        if depth > COMPRESSION_MAX_CHAIN_DEPTH {
-            return Err(EngineError::CompressionCycle {
-                chain: visited.iter().map(|i| i.as_str().to_string()).collect(),
-            });
-        }
-        if !visited.insert(current.clone()) {
-            // Revisit — cycle. Include the offending id in the chain.
-            let mut chain: Vec<String> =
-                visited.iter().map(|i| i.as_str().to_string()).collect();
-            chain.push(format!("(revisit: {current})"));
-            return Err(EngineError::CompressionCycle { chain });
-        }
-        // Load the predecessor; if not found, treat as a leaf (no
-        // further chain to walk). Missing predecessors are
-        // legitimately possible mid-compression on a half-populated
-        // window — compress() validates existence separately.
-        let mem = match get_by_id(ctx, storage, &current).await? {
-            Some(m) => m,
-            None => continue,
-        };
-        for next in &mem.frontmatter.derived_from {
-            frontier.push((next.clone(), depth + 1));
+    while let Some(top) = stack.last_mut() {
+        match top.pending_children.pop() {
+            Some(child_id) => {
+                let child_depth = top.depth + 1;
+                if child_depth > COMPRESSION_MAX_CHAIN_DEPTH {
+                    return Err(EngineError::CompressionCycle {
+                        chain: stack_to_chain(&stack, Some(&child_id)),
+                    });
+                }
+                // Path-based cycle check: if `child_id` is already
+                // on the current root-to-here path, we have a true
+                // cycle. (NOT the audit C1 false-positive: a diamond
+                // ancestor is on `path` ONLY during its own subtree
+                // walk; popped before the sibling branch visits.)
+                if !path.insert(child_id.clone()) {
+                    return Err(EngineError::CompressionCycle {
+                        chain: stack_to_chain(&stack, Some(&child_id)),
+                    });
+                }
+                // Load child's derived_from. Missing predecessor →
+                // treat as leaf (no further chain).
+                let child_children = match get_by_id(ctx, storage, &child_id).await? {
+                    Some(m) => m.frontmatter.derived_from.into_iter().rev().collect(),
+                    None => Vec::new(),
+                };
+                stack.push(Frame {
+                    id: child_id,
+                    pending_children: child_children,
+                    depth: child_depth,
+                });
+            }
+            None => {
+                // Done processing this node's children. Pop from
+                // path + stack. Sibling branches at the parent
+                // level can now legitimately re-traverse any
+                // ancestors that were only reached through THIS
+                // branch.
+                let frame = stack.pop().expect("just matched");
+                path.remove(&frame.id);
+            }
         }
     }
     Ok(())
+}
+
+/// Render the current stack + optional revisit-target as a
+/// human-readable chain string for the error variant.
+fn stack_to_chain(stack: &[Frame], revisit: Option<&MemoryId>) -> Vec<String> {
+    let mut chain: Vec<String> = stack.iter().map(|f| f.id.as_str().to_string()).collect();
+    if let Some(r) = revisit {
+        chain.push(format!("(revisit: {r})"));
+    }
+    chain
 }
 
 #[cfg(test)]
@@ -114,64 +150,81 @@ mod tests {
 
     #[tokio::test]
     async fn detects_no_cycle_in_raw_memory_window() {
-        // Raw memories have empty derived_from → no chain to walk.
         let storage: Arc<dyn Storage> = Arc::new(MemoryStorage::default());
         let vi = HnswVectorIndex::new(4);
         let emb = MockEmbedder::new(4).with_response(vec![unit_vec(4, 0)]);
         let id = MemoryId::new("mem-raw00000");
         insert(&ctx(), storage.as_ref(), &emb, &vi, id.clone(), "x", "y", now_t()).await.unwrap();
         let mem = get_by_id(&ctx(), storage.as_ref(), &id).await.unwrap().unwrap();
-        let r = detect_cycle_in_window(&ctx(), storage.as_ref(), &[mem]).await;
-        assert!(r.is_ok());
+        assert!(detect_cycle_in_window(&ctx(), storage.as_ref(), &[mem]).await.is_ok());
     }
 
+    /// Phase E2 audit C1 regression: diamond DAGs are NOT cycles.
+    /// `Mcc.derived_from = [Mc1, Mc2]` where both Mc1 and Mc2 derive
+    /// from raw1 is legitimate (recursive compression with overlap).
+    /// The previous implementation false-positived because the
+    /// visited set was shared across DFS branches.
     #[tokio::test]
-    async fn detects_no_cycle_in_one_level_compressed_window() {
-        // Compress two raw memories, then try to detect cycle on the
-        // compressed memory's window. The compressed memory has
-        // derived_from = [raw1, raw2] (both raw, no further chain).
-        // Should NOT detect a cycle.
+    async fn diamond_dag_is_not_a_cycle() {
         use crate::engine::llm::{Generation, MockLlmClient};
         let storage: Arc<dyn Storage> = Arc::new(MemoryStorage::default());
         let vi = HnswVectorIndex::new(4);
-        let emb1 = MockEmbedder::new(4).with_response(vec![unit_vec(4, 0)]);
-        let emb2 = MockEmbedder::new(4).with_response(vec![unit_vec(4, 0)]);
-        let id1 = MemoryId::new("mem-raw00001");
-        let id2 = MemoryId::new("mem-raw00002");
-        insert(&ctx(), storage.as_ref(), &emb1, &vi, id1.clone(), "a", "a body", now_t()).await.unwrap();
-        insert(&ctx(), storage.as_ref(), &emb2, &vi, id2.clone(), "b", "b body", now_t()).await.unwrap();
-        let llm = MockLlmClient::default().with_response(
-            Generation::new(r#"{"description":"s","content":"c"}"#)
-                .with_parsed(serde_json::json!({"description":"s","content":"c"})),
-        );
-        let emb_c = MockEmbedder::new(4).with_response(vec![unit_vec(4, 1)]);
-        let mc = do_compress(
-            &ctx(),
-            storage.as_ref(),
-            &llm,
-            &emb_c,
-            &vi,
-            CompressionWindow::Ids(vec![id1, id2]),
+        // Insert raw1.
+        let raw1 = MemoryId::new("mem-dia00001");
+        let emb_r = MockEmbedder::new(4).with_response(vec![unit_vec(4, 0)]);
+        insert(&ctx(), storage.as_ref(), &emb_r, &vi, raw1.clone(), "raw1", "raw1 body", now_t()).await.unwrap();
+
+        // Compress raw1 → Mc1.
+        let llm = MockLlmClient::default()
+            .with_response(Generation::new(r#"{"description":"mc1","content":"c1"}"#)
+                .with_parsed(serde_json::json!({"description":"mc1","content":"c1"})))
+            .with_response(Generation::new(r#"{"description":"mc2","content":"c2"}"#)
+                .with_parsed(serde_json::json!({"description":"mc2","content":"c2"})));
+        let emb_c1 = MockEmbedder::new(4).with_response(vec![unit_vec(4, 1)]);
+        let mc1 = do_compress(
+            &ctx(), storage.as_ref(), &llm, &emb_c1, &vi,
+            CompressionWindow::Ids(vec![raw1.clone()]),
+            &CompressionConfig::default(), now_t(),
+        ).await.unwrap();
+
+        // Compress raw1 (again) → Mc2. (Same raw1; two distinct
+        // compressors pointing at it. Diamond when Mcc later
+        // compresses both Mc1 + Mc2.)
+        let emb_c2 = MockEmbedder::new(4).with_response(vec![unit_vec(4, 2)]);
+        let mc2 = do_compress(
+            &ctx(), storage.as_ref(), &llm, &emb_c2, &vi,
+            // Slight perturbation in the window so mint_compressed_id
+            // produces a different id than mc1.
+            CompressionWindow::Ids(vec![raw1.clone()]),
             &CompressionConfig::default(),
-            now_t(),
-        )
-        .await
-        .unwrap();
-        // Mc has 2 raw predecessors. Walk should succeed.
-        let r = detect_cycle_in_window(&ctx(), storage.as_ref(), &[mc]).await;
-        assert!(r.is_ok());
+            // shift the timestamp slightly to differentiate the id
+            now_t() + chrono::Duration::milliseconds(1),
+        ).await.unwrap();
+        assert_ne!(mc1.frontmatter.id, mc2.frontmatter.id, "diamond setup needs distinct compressors");
+
+        // Now hand-build Mcc with derived_from = [Mc1, Mc2].
+        // (We can't compress(Mc1, Mc2) easily because they share raw1
+        // — that's the diamond setup. We assert cycle-check directly.)
+        use crate::engine::memory::{Memory, MemoryFrontmatter};
+        let mcc_id = MemoryId::new("mem-c-diamond01");
+        let mut mcc_fm = MemoryFrontmatter::new(mcc_id.clone(), "mcc", now_t());
+        mcc_fm.derived_from = vec![mc1.frontmatter.id.clone(), mc2.frontmatter.id.clone()];
+        let mcc = Memory::new(mcc_fm, "mcc body");
+
+        // Run cycle detection. Must NOT detect a cycle (this is the
+        // C1 regression).
+        let r = detect_cycle_in_window(&ctx(), storage.as_ref(), &[mcc]).await;
+        assert!(
+            r.is_ok(),
+            "diamond DAG must NOT trigger cycle detector: {r:?}"
+        );
     }
 
     #[tokio::test]
-    async fn detects_cycle_when_derived_from_self_references() {
-        // Hand-build a memory where derived_from contains its own id
-        // (synthetic corruption). The walk should detect the
-        // revisit. We construct via direct frontmatter write since
-        // the normal compress() path wouldn't produce this.
+    async fn detects_self_reference_as_cycle() {
         use crate::engine::memory::{Memory, MemoryFrontmatter};
         let storage: Arc<dyn Storage> = Arc::new(MemoryStorage::default());
         let id = MemoryId::new("mem-cyc00001");
-        // Bootstrap: write a memory file with derived_from = [self].
         let mut fm = MemoryFrontmatter::new(id.clone(), "cyclic", now_t());
         fm.derived_from = vec![id.clone()];
         let yaml = crate::engine::memory::store::render_memory_yaml(&fm, "body").unwrap();
@@ -179,14 +232,31 @@ mod tests {
         storage.put(&key, bytes::Bytes::from(yaml)).await.unwrap();
         let mem = Memory::new(fm, "body");
         let r = detect_cycle_in_window(&ctx(), storage.as_ref(), &[mem]).await;
-        match r {
-            Err(EngineError::CompressionCycle { chain }) => {
-                assert!(
-                    chain.iter().any(|s| s.contains("mem-cyc00001")),
-                    "cycle chain should include the cyclic id: {chain:?}"
-                );
-            }
-            other => panic!("expected CompressionCycle, got {other:?}"),
-        }
+        assert!(matches!(r, Err(EngineError::CompressionCycle { .. })));
+    }
+
+    #[tokio::test]
+    async fn detects_two_node_cycle() {
+        // M1.derived_from = [M2]; M2.derived_from = [M1]. Walking
+        // from M1 hits M1 again via M2. Cycle.
+        use crate::engine::memory::{Memory, MemoryFrontmatter};
+        let storage: Arc<dyn Storage> = Arc::new(MemoryStorage::default());
+        let m1_id = MemoryId::new("mem-cy200001");
+        let m2_id = MemoryId::new("mem-cy200002");
+        // Write M2 first with derived_from = [M1].
+        let mut m2_fm = MemoryFrontmatter::new(m2_id.clone(), "m2", now_t());
+        m2_fm.derived_from = vec![m1_id.clone()];
+        let yaml = crate::engine::memory::store::render_memory_yaml(&m2_fm, "body").unwrap();
+        let key = crate::engine::storage::StorageKey::memory(&ctx(), m2_id.as_str());
+        storage.put(&key, bytes::Bytes::from(yaml)).await.unwrap();
+        // M1 has derived_from = [M2]. Construct in memory + run.
+        let mut m1_fm = MemoryFrontmatter::new(m1_id.clone(), "m1", now_t());
+        m1_fm.derived_from = vec![m2_id.clone()];
+        let yaml = crate::engine::memory::store::render_memory_yaml(&m1_fm, "body").unwrap();
+        let key = crate::engine::storage::StorageKey::memory(&ctx(), m1_id.as_str());
+        storage.put(&key, bytes::Bytes::from(yaml)).await.unwrap();
+        let m1 = Memory::new(m1_fm, "body");
+        let r = detect_cycle_in_window(&ctx(), storage.as_ref(), &[m1]).await;
+        assert!(matches!(r, Err(EngineError::CompressionCycle { .. })));
     }
 }

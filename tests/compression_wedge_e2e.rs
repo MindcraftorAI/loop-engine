@@ -310,3 +310,193 @@ async fn compress_with_predecessor_window_yields_correct_derived_from() {
     .unwrap();
     assert_eq!(mc.frontmatter.derived_from.len(), 3);
 }
+
+/// Phase E2 audit M1 regression: duplicate ids in
+/// `CompressionWindow::Ids` must be deduped — `derived_from` should
+/// reflect unique predecessors, and the citation transfer must not
+/// double-count.
+#[tokio::test]
+async fn compress_dedupes_duplicate_predecessor_ids() {
+    let storage: Arc<dyn Storage> = Arc::new(MemoryStorage::default());
+    let vector_index = HnswVectorIndex::new(4);
+    let m1 = MemoryId::new("mem-dedup0001");
+    let emb = MockEmbedder::new(4).with_response(vec![unit_vec(4, 0)]);
+    insert(&ctx(), storage.as_ref(), &emb, &vector_index, m1.clone(), "x", "y", now()).await.unwrap();
+    increment_citation_count(&ctx(), storage.as_ref(), &m1).await.unwrap();
+    // Window with M1 listed 3 times.
+    let llm = MockLlmClient::default().with_response(success_generation(
+        r#"{"description":"s","content":"c"}"#,
+    ));
+    let emb_c = MockEmbedder::new(4).with_response(vec![unit_vec(4, 1)]);
+    let mc = compress(
+        &ctx(),
+        storage.as_ref(),
+        &llm,
+        &emb_c,
+        &vector_index,
+        CompressionWindow::Ids(vec![m1.clone(), m1.clone(), m1.clone()]),
+        &CompressionConfig::default(),
+        now(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(mc.frontmatter.derived_from.len(), 1, "duplicates must be deduped");
+    assert_eq!(
+        mc.frontmatter.consumed_by_user_lessons, 1,
+        "citation transfer must not double-count"
+    );
+}
+
+/// Phase E2 audit M3 fix: the wedge regression must actually
+/// EXERCISE the chase repair path. We force Mc's counter to 0
+/// (simulating drift / partial-write corruption), then run
+/// `recompute_citation_counts` and assert it RESTORES the count.
+/// The original C-x3 test passed equally if recompute were a no-op.
+#[tokio::test]
+async fn wedge_recompute_actually_restores_drift_through_compression_chain() {
+    let storage: Arc<dyn Storage> = Arc::new(MemoryStorage::default());
+    let vector_index = HnswVectorIndex::new(4);
+    let emb = MockEmbedder::new(4).with_response(vec![unit_vec(4, 0)]);
+    let m1 = MemoryId::new("mem-drift1234");
+    insert(&ctx(), storage.as_ref(), &emb, &vector_index, m1.clone(), "x", "y", now()).await.unwrap();
+    increment_citation_count(&ctx(), storage.as_ref(), &m1).await.unwrap();
+    write_user_lesson_citing_memory(storage.as_ref(), "les-drift0001", m1.clone()).await;
+    let llm = MockLlmClient::default().with_response(success_generation(
+        r#"{"description":"s","content":"c"}"#,
+    ));
+    let emb_c = MockEmbedder::new(4).with_response(vec![unit_vec(4, 1)]);
+    let mc = compress(
+        &ctx(),
+        storage.as_ref(),
+        &llm,
+        &emb_c,
+        &vector_index,
+        CompressionWindow::Ids(vec![m1.clone()]),
+        &CompressionConfig::default(),
+        now(),
+    )
+    .await
+    .unwrap();
+    delete(&ctx(), storage.as_ref(), &vector_index, &m1, true).await.unwrap();
+    assert_eq!(mc.frontmatter.consumed_by_user_lessons, 1);
+
+    // Inject drift: force Mc.counter to 0 by direct write.
+    // Construct a minimal corrupted YAML matching the frontmatter
+    // structure with `consumed_by_user_lessons: 0`.
+    let mc_key = StorageKey::memory(&ctx(), mc.frontmatter.id.as_str());
+    let drifted = format!(
+        "---\n\
+         id: {}\n\
+         description: {}\n\
+         created_at: \"{}\"\n\
+         consumed_by_user_lessons: 0\n\
+         derived_from:\n  - {}\n\
+         ---\n\
+         compressed body\n",
+        mc.frontmatter.id.as_str(),
+        mc.frontmatter.description,
+        mc.frontmatter.created_at,
+        m1.as_str(),
+    );
+    storage.put(&mc_key, Bytes::from(drifted)).await.unwrap();
+
+    // Verify drift.
+    let pre = get_by_id(&ctx(), storage.as_ref(), &mc.frontmatter.id).await.unwrap().unwrap();
+    assert_eq!(pre.frontmatter.consumed_by_user_lessons, 0);
+
+    // Recompute: chase walks M1 → Mc, lesson citation credits Mc,
+    // counter rewritten back to 1.
+    let stats = recompute_citation_counts(&ctx(), storage.as_ref()).await.unwrap();
+    assert_eq!(stats.counters_repaired, 1, "recompute must REPAIR the drift");
+    assert_eq!(stats.orphan_citations, 0, "no orphan: chase resolved Mc");
+    let post = get_by_id(&ctx(), storage.as_ref(), &mc.frontmatter.id).await.unwrap().unwrap();
+    assert_eq!(
+        post.frontmatter.consumed_by_user_lessons, 1,
+        "recompute must RESTORE the citation through the chain"
+    );
+}
+
+/// Phase E2 audit M4 fix: NEGATIVE control. An LLM-authored lesson
+/// must NOT confer immunity through compression. The user-immunity
+/// invariant is specifically about USER-authored lessons. If a
+/// flipped `authored_by.is_user()` check landed (treating LLM as
+/// user), this test would catch it.
+#[tokio::test]
+async fn llm_authored_lesson_does_not_confer_immunity_through_compression() {
+    let storage: Arc<dyn Storage> = Arc::new(MemoryStorage::default());
+    let vector_index = HnswVectorIndex::new(4);
+    let emb = MockEmbedder::new(4).with_response(vec![unit_vec(4, 0)]);
+    let m1 = MemoryId::new("mem-llmlsn001");
+    insert(&ctx(), storage.as_ref(), &emb, &vector_index, m1.clone(), "x", "y", now()).await.unwrap();
+
+    // Write an LLM-authored lesson citing M1 (the only difference
+    // from the user-authored wedge test is `authored_by:
+    // Authorship::Llm`).
+    let fm = LessonFrontmatter {
+        id: "les-llm00001".into(),
+        description: "llm-authored lesson".into(),
+        status: LessonStatus::Active,
+        created_at: "2026-05-14T00:00:00Z".into(),
+        causal_narrative: Some(CausalNarrative {
+            trigger: "t".into(),
+            failure_mode: "f".into(),
+            correction: "c".into(),
+            confidence: Confidence::Inferred,
+            evidence_refs: vec![EvidenceRef::Memory(m1.clone())],
+            generated_by: GeneratedBy::Llm,
+            generated_at: "2026-05-14T00:00:00Z".into(),
+        }),
+        target_skill: None,
+        source_feedback_ids: None,
+        applied_count: 0,
+        last_applied_at: None,
+        thumbs_up_count: 0,
+        thumbs_down_count: 0,
+        external_signal_sources: vec![],
+        promotion_eligible_at: None,
+        superseded_by: None,
+        superseded_at: None,
+        ingest_provenance: None,
+        authored_by: Authorship::Llm, // NOT User — this is the load-bearing distinction
+        updated_at: None,
+    };
+    let yaml = serialize_lesson_frontmatter(&fm);
+    let content = combine_frontmatter(&yaml, "body\n");
+    let key = StorageKey::lesson(&ctx(), "active", "les-llm00001");
+    storage.put(&key, bytes::Bytes::from(content)).await.unwrap();
+
+    // No `increment_citation_count` — only user-authored lessons
+    // should drive immunity, and the recompute walk is what drives
+    // that counter from on-disk lesson data.
+
+    // Recompute. Should NOT credit M1 (lesson is Llm-authored).
+    let stats = recompute_citation_counts(&ctx(), storage.as_ref()).await.unwrap();
+    assert_eq!(stats.lessons_scanned, 1);
+    let m1_after = get_by_id(&ctx(), storage.as_ref(), &m1).await.unwrap().unwrap();
+    assert_eq!(
+        m1_after.frontmatter.consumed_by_user_lessons, 0,
+        "LLM-authored citations MUST NOT drive the immunity counter"
+    );
+}
+
+/// Phase E2 audit C2: orphan citation surfaces in RecomputeStats.
+/// User-authored lesson cites a memory; memory is force-deleted;
+/// no compressor for it. The chase returns None → recompute should
+/// increment `orphan_citations` (audit signal, not error).
+#[tokio::test]
+async fn orphan_citation_surfaces_in_recompute_stats() {
+    let storage: Arc<dyn Storage> = Arc::new(MemoryStorage::default());
+    let vector_index = HnswVectorIndex::new(4);
+    let emb = MockEmbedder::new(4).with_response(vec![unit_vec(4, 0)]);
+    let m1 = MemoryId::new("mem-orph00001");
+    insert(&ctx(), storage.as_ref(), &emb, &vector_index, m1.clone(), "x", "y", now()).await.unwrap();
+    increment_citation_count(&ctx(), storage.as_ref(), &m1).await.unwrap();
+    write_user_lesson_citing_memory(storage.as_ref(), "les-orph00001", m1.clone()).await;
+    // Force-delete M1 WITHOUT compressing it first. Citation chain
+    // is now orphaned — the lesson still cites M1, but neither M1
+    // nor any successor exists.
+    delete(&ctx(), storage.as_ref(), &vector_index, &m1, true).await.unwrap();
+
+    let stats = recompute_citation_counts(&ctx(), storage.as_ref()).await.unwrap();
+    assert_eq!(stats.orphan_citations, 1, "audit C2 — orphan must be counted");
+}

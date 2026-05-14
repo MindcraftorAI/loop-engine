@@ -144,7 +144,16 @@ pub async fn compress(
     now: DateTime<Utc>,
 ) -> Result<Memory, EngineError> {
     // 1. Resolve window → Vec<MemoryId> + load each Memory.
-    let predecessor_ids = resolve_window(ctx, storage, window).await?;
+    //    Phase E2 audit M1 fix: dedupe the resolved id set BEFORE
+    //    loading so a window like `Ids(vec![M1, M1])` doesn't
+    //    inflate `derived_from` AND double-count the citation
+    //    transfer.
+    let mut predecessor_ids = resolve_window(ctx, storage, window).await?;
+    {
+        let mut seen: std::collections::HashSet<MemoryId> =
+            std::collections::HashSet::new();
+        predecessor_ids.retain(|id| seen.insert(id.clone()));
+    }
     if predecessor_ids.is_empty() {
         // No memories to compress → graceful refusal. Distinct from
         // LLM refusal; this is an "empty input" guard.

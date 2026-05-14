@@ -24,16 +24,22 @@ use serde::{Deserialize, Serialize};
 pub mod compress;
 pub(crate) mod cycle;
 pub mod id;
+pub mod lifecycle;
 pub mod store;
 
 pub use compress::{compress, CompressionConfig, CompressionWindow};
 pub use id::MemoryId;
+// Phase E2 audit B-M2 extraction: chase + recompute live in
+// `lifecycle.rs`. Re-exported here so existing call sites continue
+// to work via `memory::recompute_citation_counts` etc.
+pub use lifecycle::{
+    get_by_id_chasing_derived_from, recompute_citation_counts, RecomputeStats,
+};
 // `decrement_citation_count` is `pub(crate)` — Phase G consumes from
 // within the engine; not part of the external API.
 pub use store::{
-    delete, get_by_id, get_by_id_chasing_derived_from, get_by_id_with_embedding,
-    increment_citation_count, insert, prune, recompute_citation_counts, search,
-    RecomputeStats,
+    delete, get_by_id, get_by_id_with_embedding, increment_citation_count, insert, prune,
+    search,
 };
 
 /// YAML frontmatter for a memory file on disk. Mirrors

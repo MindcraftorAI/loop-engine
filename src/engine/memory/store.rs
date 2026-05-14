@@ -39,7 +39,9 @@ use crate::engine::yaml::{combine_frontmatter, split_frontmatter_normalized};
 /// CAS-RMW retry budget for citation-counter updates (Phase A C5
 /// pattern). 5 retries absorbs cross-process contention; exhaustion
 /// surfaces as `EngineError::CasContended`.
-const CITATION_CAS_MAX_RETRIES: u32 = 5;
+/// `pub(crate)` so `engine::memory::lifecycle` (Phase E2 audit B-M2
+/// extraction) reuses the same retry budget.
+pub(crate) const CITATION_CAS_MAX_RETRIES: u32 = 5;
 
 /// `.vec` sidecar file holding the raw little-endian f32 embedding.
 /// `pub(crate)` so the compression module (Phase E2) can build keys
@@ -176,88 +178,9 @@ pub async fn get_by_id(
     Ok(Some(Memory::new(fm, content)))
 }
 
-/// Phase E2 D-Cx6: forward-walk the `derived_from` chain from
-/// `target` to the most-recent existing memory. Useful for citation
-/// resolution when raw memories have been force-deleted post-
-/// compression: the lesson's `EvidenceRef::Memory(M1)` still
-/// resolves to the compressed memory `Mc` that absorbed it.
-///
-/// Algorithm:
-///   1. If `get_by_id(target)` returns Some, return it (the target
-///      itself exists; no chase needed).
-///   2. Otherwise, scan all memories for one whose `derived_from`
-///      contains `target` → that's the compressor `Mc`.
-///   3. Recursively chase `Mc` (it may itself have been compressed).
-///   4. Cap depth at 16 (cycle / pathology defense).
-///
-/// Returns `None` when:
-///   - target doesn't exist AND no compressor contains it.
-///   - chain depth exceeds 16 (rare; surfaces as None silently).
-///
-/// Cost: O(N) per hop (full memory scan). For large stores, future
-/// cycles add a reverse-index optimization (OQ-Cx6 reservation).
-pub async fn get_by_id_chasing_derived_from(
-    ctx: &Context,
-    storage: &dyn Storage,
-    target: &MemoryId,
-) -> Result<Option<Memory>, EngineError> {
-    let mut current = target.clone();
-    let mut visited: std::collections::HashSet<MemoryId> = std::collections::HashSet::new();
-    for _depth in 0..16 {
-        if !visited.insert(current.clone()) {
-            return Ok(None); // cycle defense
-        }
-        // Try current itself.
-        if let Some(mem) = get_by_id(ctx, storage, &current).await? {
-            // Found a live memory in the chain. Keep going IF some
-            // other memory has compressed THIS into a successor —
-            // that's the "most-recent" semantics. Look for a Mc
-            // whose derived_from contains `current`.
-            if let Some(successor) = find_compressor_of(ctx, storage, &current).await? {
-                current = successor;
-                continue;
-            }
-            // No successor; `mem` is the leaf.
-            return Ok(Some(mem));
-        }
-        // current is missing. Look for a compressor of `current`.
-        match find_compressor_of(ctx, storage, &current).await? {
-            Some(successor) => current = successor,
-            None => return Ok(None), // dead end
-        }
-    }
-    Ok(None) // depth-cap fallthrough
-}
-
-/// Scan memories for one whose `derived_from` contains `target`.
-/// Returns the FIRST such memory's id; subsequent matches are
-/// silently ignored (ambiguous compression — one predecessor, two
-/// compressors — is treated as the host's responsibility).
-async fn find_compressor_of(
-    ctx: &Context,
-    storage: &dyn Storage,
-    target: &MemoryId,
-) -> Result<Option<MemoryId>, EngineError> {
-    let prefix = StorageKey::memories_prefix(ctx);
-    let keys = storage.list(&prefix).await?;
-    for key in keys {
-        if !key.as_str().ends_with(".md") {
-            continue;
-        }
-        let bytes = match storage.get(&key).await? {
-            Some(b) => b,
-            None => continue,
-        };
-        let (fm, _body) = match parse_memory_file(&bytes) {
-            Ok(p) => p,
-            Err(_) => continue,
-        };
-        if fm.derived_from.contains(target) {
-            return Ok(Some(fm.id));
-        }
-    }
-    Ok(None)
-}
+// Phase E2 audit B-M2 extraction: `get_by_id_chasing_derived_from`
+// + `find_compressor_of` moved to `super::lifecycle`. Re-exported
+// from `engine::memory::mod` for backward compatibility.
 
 /// Load a memory by id INCLUDING its embedding (from the `.vec`
 /// sidecar). Returns `Ok(None)` if the .md file is absent. Errors
@@ -540,6 +463,16 @@ fn now_iso() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 
+// Phase E2 audit B-M2 extraction: `recompute_citation_counts` +
+// `set_citation_count` + `RecomputeStats` moved to
+// `super::lifecycle`. Re-exported from `engine::memory::mod`.
+//
+// Original docstring preserved below for reference.
+
+#[allow(dead_code)]
+const _RECOMPUTE_DOC_HINT: &str = "moved to engine::memory::lifecycle";
+
+/* MOVED: see super::lifecycle::recompute_citation_counts
 /// Phase E D-E8 drift escape hatch — bounded-cost integrity-restore
 /// for the `consumed_by_user_lessons` counter. Scans ALL lessons
 /// (across every status dir), counts `EvidenceRef::Memory(_)`
@@ -726,12 +659,19 @@ pub struct RecomputeStats {
     /// run with drift = 0.
     pub counters_repaired: usize,
 }
+*/
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::engine::context::Context;
     use crate::engine::embedding::MockEmbedder;
+    // Phase E2 audit B-M2 extraction: recompute + chase moved to
+    // sibling module. Test refs in this file import via the sibling
+    // path.
+    use crate::engine::memory::lifecycle::{
+        get_by_id_chasing_derived_from, recompute_citation_counts,
+    };
     use crate::engine::storage::MemoryStorage;
     use crate::engine::vector::HnswVectorIndex;
     use std::sync::Arc;
