@@ -43,7 +43,13 @@ jobs:
       # intentionally when refreshing the baseline. Local devs MUST
       # rustup install the same nightly to reproduce:
       #   rustup install nightly-2026-05-13
-      - uses: dtolnay/rust-toolchain@nightly-2026-05-13
+      #
+      # Action syntax note: dtolnay/rust-toolchain's git refs are channel
+      # names (stable/beta/nightly), NOT specific versions. To pin a
+      # nightly date, use the @master ref + `toolchain:` input.
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-05-13
       - uses: Swatinem/rust-cache@v2
       - name: install cargo-public-api
         run: cargo install --locked cargo-public-api
