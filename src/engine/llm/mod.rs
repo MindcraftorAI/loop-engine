@@ -4,7 +4,8 @@
 //! modules call to invoke an LLM. Engine-private; provider impls
 //! (Anthropic API, Claude Agent SDK, OpenAI, local Ollama, etc) live
 //! in the future monolith repo per the engine/monolith split. The
-//! engine ships only the trait + types + [`MockLlmClient`].
+//! engine ships only the trait + types + `MockLlmClient` (behind the
+//! `test-fixtures` feature).
 //!
 //! Pattern is lifted from [`crate::engine::storage::Storage`] +
 //! [`crate::engine::sentiment::SentimentClassifier`]:
@@ -43,7 +44,8 @@ use crate::engine::context::Context;
 ///
 /// One method: `generate`. All variation is in [`GenerateRequest`] +
 /// [`ResponseFormat`]. The trait is sealed; engine-shipped impls
-/// today are only [`MockLlmClient`] (test fixture). Monolith adapters
+/// today are only `MockLlmClient` (test fixture, behind the
+/// `test-fixtures` Cargo feature). Monolith adapters
 /// (Anthropic, Claude Agent SDK, ...) ship in the future monolith
 /// crate and satisfy the sealed marker via the workspace pattern.
 #[async_trait]

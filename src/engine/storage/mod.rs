@@ -38,7 +38,7 @@ pub use version::Version;
 /// `Send + Sync + Debug`: held in `Arc<dyn Storage>` and used across
 /// tokio multi-thread runtime tasks.
 ///
-/// Sealed via [`sealed::Sealed`] — only engine-shipped backends can
+/// Sealed via `sealed::Sealed` (private) — only engine-shipped backends can
 /// satisfy this trait. See module docs.
 #[async_trait]
 pub trait Storage: Send + Sync + Debug + sealed::Sealed {
@@ -75,7 +75,7 @@ pub trait Storage: Send + Sync + Debug + sealed::Sealed {
     ) -> Result<bool, StorageError>;
 
     /// Read a key and its version atomically (the version that callers
-    /// will pass back to [`put_if_version`]). `Ok(None)` for absent.
+    /// will pass back to [`Self::put_if_version`]). `Ok(None)` for absent.
     async fn get_with_version(
         &self,
         key: &StorageKey,

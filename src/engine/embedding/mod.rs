@@ -6,7 +6,8 @@
 //! are commonly the same vendor as LLM providers but the abstraction
 //! is independent: one trait per concern.
 //!
-//! Engine ships only the trait + types + [`MockEmbedder`]. Provider
+//! Engine ships only the trait + types + `MockEmbedder` (behind the
+//! `test-fixtures` feature). Provider
 //! impls live in the future monolith repo per the engine/monolith
 //! split.
 //!

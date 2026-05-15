@@ -150,7 +150,7 @@ pub async fn insert(
     .await
 }
 
-/// Insert a memory with an explicit [`MemoryScope`]. Phase F D-F8 +
+/// Insert a memory with an explicit [`crate::engine::memory::MemoryScope`]. Phase F D-F8 +
 /// audit-fix close: the write half of the scope-aware manifest filter.
 /// `insert` delegates to this with `MemoryScope::User`. v0.4 callers
 /// that want to record provenance metadata should use
@@ -183,8 +183,8 @@ pub async fn insert_scoped(
     .await
 }
 
-/// Insert a memory with explicit [`MemoryScope`] AND optional
-/// [`MemoryOrigin`] provenance. Phase G D-G1 (v0.4) — the deepest
+/// Insert a memory with explicit [`crate::engine::memory::MemoryScope`] AND optional
+/// [`crate::engine::memory::MemoryOrigin`] provenance. Phase G D-G1 (v0.4) — the deepest
 /// write-path for `memory.create` callers that have rich host-side
 /// context to attach.
 ///

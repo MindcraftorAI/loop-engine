@@ -316,7 +316,7 @@ pub struct LessonFrontmatter {
     #[serde(default)]
     pub external_signal_sources: Vec<String>,
     /// Phase G D-G3 (v0.4): unique session_ids that have applied this
-    /// lesson. Capped at [`MAX_APPLIED_SESSION_IDS`]. Feeds the
+    /// lesson. Capped at [`crate::engine::lessons::gate::MAX_APPLIED_SESSION_IDS`]. Feeds the
     /// gate's `origin_diverse` signal — a lesson applied across N
     /// distinct sessions is harder to fake than one applied N times
     /// in a single session.

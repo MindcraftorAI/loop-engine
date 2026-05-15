@@ -88,7 +88,7 @@ pub enum AbstainReason {
     UntestedHostVersion,
 }
 
-/// Output of [`Orchestrator::process_event`] for one input event.
+/// Output of [`crate::engine::sentiment::orchestrator::Orchestrator::process_event`] for one input event.
 ///
 /// `#[non_exhaustive]`: future calibration may add fields.
 #[derive(Debug, Clone, Default, PartialEq)]

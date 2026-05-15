@@ -42,7 +42,7 @@ use crate::engine::storage::{Storage, StorageKey};
 /// Cost: O(N) per hop (full memory scan). Use sparingly; for bulk
 /// resolution (e.g. inside `recompute_citation_counts`) build a
 /// predecessor→compressor map ONCE and walk that instead — see
-/// [`build_predecessor_index`].
+/// `build_predecessor_index` (private to this module).
 pub async fn get_by_id_chasing_derived_from(
     ctx: &Context,
     storage: &dyn Storage,

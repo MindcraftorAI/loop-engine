@@ -6,7 +6,7 @@
 //! four speak the same `/v1/embeddings` endpoint shape:
 //!
 //!   POST {base_url}/embeddings
-//!   { "model": "<model>", "input": ["text", ...] }
+//!   `{ "model": "<MODEL>", "input": ["text", ...] }`
 //!
 //!   200 OK
 //!   { "data": [ { "embedding": [f32; N] }, ... ] }

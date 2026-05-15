@@ -55,7 +55,7 @@ impl SearchHit {
 /// don't fight for `&mut self`. Trait is sealed.
 ///
 /// Phase E C-E1 ships the trait + the local impl's seal marker.
-/// [`HnswVectorIndex`](self::HnswVectorIndex) lands in C-E2.
+/// [`HnswVectorIndex`] lands in C-E2.
 #[async_trait]
 pub trait VectorIndex: Send + Sync + Debug + sealed::Sealed {
     /// Insert (or update) a vector for `id`. Replacing an existing
@@ -92,7 +92,7 @@ pub trait VectorIndex: Send + Sync + Debug + sealed::Sealed {
     /// insert (would be too slow).
     async fn persist(&self, ctx: &Context, storage: &dyn Storage) -> Result<(), VectorIndexError>;
 
-    /// Vector dimensionality. Must match the [`Embedder::dimensions()`]
+    /// Vector dimensionality. Must match the [`crate::engine::embedding::Embedder::dimensions`]
     /// of the embedder used to produce vectors for this index.
     fn dimensions(&self) -> usize;
 }

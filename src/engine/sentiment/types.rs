@@ -82,7 +82,7 @@ impl std::fmt::Display for Hazard {
 // AttributionMethod — non_exhaustive; abstain is Option::None not a variant
 // =====================================================================
 
-/// Which attribution pass produced the [`Attribution`].
+/// Which attribution pass produced the [`crate::engine::sentiment::attribution::Attribution`].
 ///
 /// Audit smell S15/S16: no `Abstained` variant — abstention is
 /// `Option<Attribution>::None`, not a sixth enum value.
@@ -157,7 +157,7 @@ macro_rules! impl_confidence_newtype {
 
 impl_confidence_newtype!(
     AttributionConfidence,
-    "Confidence in an [`Attribution`] — set by the attribution algorithm."
+    "Confidence in an `Attribution` — set by the attribution algorithm."
 );
 impl_confidence_newtype!(
     ClassifierConfidence,

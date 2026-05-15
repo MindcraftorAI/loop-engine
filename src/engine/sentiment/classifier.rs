@@ -8,7 +8,7 @@
 //! - Takes `&ClassificationRequest` (owned, bounded, ships across `.await`)
 //! - Returns `Result<RawClassification, ClassifierError>` — named error enum
 //! - Production impls live in host adapters; engine ships only
-//!   [`MockSentimentClassifier`] (behind `test-fixtures` feature) here
+//!   `MockSentimentClassifier` (behind `test-fixtures` feature) here
 
 #[cfg(any(test, feature = "test-fixtures"))]
 use std::collections::VecDeque;
@@ -52,7 +52,7 @@ impl ClassifierError {
 
 /// Sentiment classifier — sealed async trait. Production impls live in
 /// host adapters (e.g. `host::claude_code::haiku_client`). The engine
-/// ships only the [`MockSentimentClassifier`] test fixture (behind
+/// ships only the `MockSentimentClassifier` test fixture (behind
 /// the `test-fixtures` Cargo feature).
 #[async_trait]
 pub trait SentimentClassifier: Send + Sync + std::fmt::Debug + sealed::Sealed {

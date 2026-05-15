@@ -5,7 +5,8 @@
 //!
 //! HNSW (Hierarchical Navigable Small World) gives sub-10ms p95 search
 //! over 100K+ vectors at dim ≤1536 — the envelope Phase E targets.
-//! Cosine similarity via [`anndists::dist::distances::DistCosine`].
+//! Cosine similarity via `anndists::dist::distances::DistCosine`
+//! (external crate, not in scope for intra-doc links).
 //!
 //! ## State + concurrency
 //!
