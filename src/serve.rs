@@ -301,6 +301,7 @@ async fn dispatch(
         "memory.create" => memory_create(params, ctx, storage, embedder, vector_index).await,
         "memory.search" => memory_search_method(params, ctx, storage, embedder, vector_index).await,
         "memory.get" => memory_get(params, ctx, storage).await,
+        "memory.list" => memory_list(params, ctx, storage).await,
         "memory.update" => memory_update_method(params, ctx, storage, embedder, vector_index).await,
         "memory.delete" => memory_delete_method(params, ctx, storage, vector_index).await,
         _ => Err(DispatchError::MethodNotFound),
@@ -1155,6 +1156,99 @@ async fn memory_get(
         Ok(None) => Err(DispatchError::NotFound(p.id)),
         Err(e) => Err(DispatchError::Other(anyhow!("memory.get failed: {e}"))),
     }
+}
+
+#[derive(Deserialize)]
+struct MemoryListParams {
+    /// Optional scope filter — same wire shape as memory.search.
+    #[serde(default)]
+    scope_filter: Option<ScopeFilterWire>,
+    /// Page size. Default 50, capped at 500.
+    #[serde(default)]
+    limit: Option<usize>,
+    /// Number of items to skip from the deterministic-sorted list.
+    /// Default 0.
+    #[serde(default)]
+    offset: Option<usize>,
+}
+
+/// `memory.list` — paginated enumeration of all memories. Filter-
+/// optional via `scope_filter`. Returns frontmatter-shape rows (id,
+/// description, scope, origin, created_at, updated_at,
+/// consumed_by_user_lessons) but NOT body — use `memory.get` for
+/// the full content of any single hit.
+async fn memory_list(
+    params: Value,
+    ctx: &Context,
+    storage: &dyn Storage,
+) -> std::result::Result<Value, DispatchError> {
+    let p: MemoryListParams =
+        serde_json::from_value(params).map_err(|e| DispatchError::InvalidParams(e.to_string()))?;
+    let limit = p.limit.unwrap_or(DEFAULT_LIST_LIMIT).min(MAX_LIST_LIMIT);
+    let offset = p.offset.unwrap_or(0);
+    let scope_filter = match p.scope_filter {
+        Some(w) => Some(w.into_engine()?),
+        None => None,
+    };
+
+    let prefix = StorageKey::memories_prefix(ctx);
+    let keys = storage
+        .list(&prefix)
+        .await
+        .map_err(|e| DispatchError::Other(anyhow!("storage list failed: {e}")))?;
+
+    let mut rows: Vec<Value> = Vec::new();
+    for key in keys {
+        // Drive off .md frontmatter files; .vec sidecars are companion
+        // data that the list path doesn't surface.
+        let key_str = key.as_str();
+        if !key_str.ends_with(".md") {
+            continue;
+        }
+        let Some(fname) = key_str.rsplit('/').next() else {
+            continue;
+        };
+        let Some(id_str) = fname.strip_suffix(".md") else {
+            continue;
+        };
+        let mem_id = MemoryId::new(id_str.to_string());
+        let mem = match memory_get_by_id(ctx, storage, &mem_id).await {
+            Ok(Some(m)) => m,
+            _ => continue,
+        };
+        // Apply scope filter if requested.
+        if let Some(filter) = &scope_filter {
+            if !filter.matches(&mem.frontmatter.scope) {
+                continue;
+            }
+        }
+        rows.push(json!({
+            "id": mem.frontmatter.id.as_str(),
+            "description": mem.frontmatter.description,
+            "scope": mem.frontmatter.scope,
+            "origin": mem.frontmatter.origin,
+            "created_at": mem.frontmatter.created_at,
+            "updated_at": mem.frontmatter.updated_at,
+            "consumed_by_user_lessons": mem.frontmatter.consumed_by_user_lessons,
+        }));
+    }
+    // Stable order: id ascending. Memory ids are ULID-shaped so
+    // alphabetical == chronological for practical purposes.
+    rows.sort_by(|a, b| {
+        let ia = a.get("id").and_then(Value::as_str).unwrap_or("");
+        let ib = b.get("id").and_then(Value::as_str).unwrap_or("");
+        ia.cmp(ib)
+    });
+
+    let total = rows.len();
+    let page: Vec<Value> = rows.into_iter().skip(offset).take(limit).collect();
+    Ok(json!({
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "returned": page.len(),
+        "results": page,
+    }))
 }
 
 #[derive(Deserialize)]
