@@ -36,7 +36,14 @@ jobs:
     # load-bearing for SemVer durability.
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@nightly
+      # Pinned nightly. cargo-public-api requires nightly (rustdoc-json),
+      # but a moving `@nightly` produces drift across runs (e.g. auto-
+      # derived !UnwindSafe → UnwindSafe flips driven by rustc internals,
+      # not by our public surface). Pin to a known-good nightly; bump
+      # intentionally when refreshing the baseline. Local devs MUST
+      # rustup install the same nightly to reproduce:
+      #   rustup install nightly-2026-05-13
+      - uses: dtolnay/rust-toolchain@nightly-2026-05-13
       - uses: Swatinem/rust-cache@v2
       - name: install cargo-public-api
         run: cargo install --locked cargo-public-api
