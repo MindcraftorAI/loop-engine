@@ -93,6 +93,7 @@ pub mod loop_engine::cli
 pub enum loop_engine::cli::Command
 pub loop_engine::cli::Command::Run
 pub loop_engine::cli::Command::Run::foreground: bool
+pub loop_engine::cli::Command::Serve
 pub loop_engine::cli::Command::Status
 pub loop_engine::cli::Command::Stop
 impl clap_builder::derive::FromArgMatches for loop_engine::cli::Command
@@ -461,6 +462,26 @@ impl core::marker::Unpin for loop_engine::engine::embedding::error::EmbeddingErr
 impl core::marker::UnsafeUnpin for loop_engine::engine::embedding::error::EmbeddingError
 impl !core::panic::unwind_safe::RefUnwindSafe for loop_engine::engine::embedding::error::EmbeddingError
 impl !core::panic::unwind_safe::UnwindSafe for loop_engine::engine::embedding::error::EmbeddingError
+pub mod loop_engine::engine::embedding::openai_compatible
+pub struct loop_engine::engine::embedding::openai_compatible::OpenAiCompatibleEmbedder
+impl loop_engine::engine::embedding::openai_compatible::OpenAiCompatibleEmbedder
+pub fn loop_engine::engine::embedding::openai_compatible::OpenAiCompatibleEmbedder::from_env() -> core::result::Result<Self, loop_engine::engine::embedding::error::EmbeddingError>
+pub fn loop_engine::engine::embedding::openai_compatible::OpenAiCompatibleEmbedder::new(base_url: impl core::convert::Into<alloc::string::String>, model: impl core::convert::Into<alloc::string::String>, api_key: core::option::Option<alloc::string::String>, dimensions: usize) -> core::result::Result<Self, loop_engine::engine::embedding::error::EmbeddingError>
+pub fn loop_engine::engine::embedding::openai_compatible::OpenAiCompatibleEmbedder::ollama_qwen3_4b() -> core::result::Result<Self, loop_engine::engine::embedding::error::EmbeddingError>
+impl core::clone::Clone for loop_engine::engine::embedding::openai_compatible::OpenAiCompatibleEmbedder
+pub fn loop_engine::engine::embedding::openai_compatible::OpenAiCompatibleEmbedder::clone(&self) -> loop_engine::engine::embedding::openai_compatible::OpenAiCompatibleEmbedder
+impl core::fmt::Debug for loop_engine::engine::embedding::openai_compatible::OpenAiCompatibleEmbedder
+pub fn loop_engine::engine::embedding::openai_compatible::OpenAiCompatibleEmbedder::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl loop_engine::engine::embedding::Embedder for loop_engine::engine::embedding::openai_compatible::OpenAiCompatibleEmbedder
+pub fn loop_engine::engine::embedding::openai_compatible::OpenAiCompatibleEmbedder::dimensions(&self) -> usize
+pub fn loop_engine::engine::embedding::openai_compatible::OpenAiCompatibleEmbedder::embed<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, _ctx: &'life1 loop_engine::engine::context::Context, texts: &'life2 [alloc::string::String]) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<alloc::vec::Vec<f32>>, loop_engine::engine::embedding::error::EmbeddingError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+impl core::marker::Freeze for loop_engine::engine::embedding::openai_compatible::OpenAiCompatibleEmbedder
+impl core::marker::Send for loop_engine::engine::embedding::openai_compatible::OpenAiCompatibleEmbedder
+impl core::marker::Sync for loop_engine::engine::embedding::openai_compatible::OpenAiCompatibleEmbedder
+impl core::marker::Unpin for loop_engine::engine::embedding::openai_compatible::OpenAiCompatibleEmbedder
+impl core::marker::UnsafeUnpin for loop_engine::engine::embedding::openai_compatible::OpenAiCompatibleEmbedder
+impl !core::panic::unwind_safe::RefUnwindSafe for loop_engine::engine::embedding::openai_compatible::OpenAiCompatibleEmbedder
+impl !core::panic::unwind_safe::UnwindSafe for loop_engine::engine::embedding::openai_compatible::OpenAiCompatibleEmbedder
 #[non_exhaustive] pub enum loop_engine::engine::embedding::EmbeddingError
 pub loop_engine::engine::embedding::EmbeddingError::InvalidOutput(alloc::string::String)
 pub loop_engine::engine::embedding::EmbeddingError::RateLimited
@@ -484,9 +505,31 @@ impl core::marker::Unpin for loop_engine::engine::embedding::error::EmbeddingErr
 impl core::marker::UnsafeUnpin for loop_engine::engine::embedding::error::EmbeddingError
 impl !core::panic::unwind_safe::RefUnwindSafe for loop_engine::engine::embedding::error::EmbeddingError
 impl !core::panic::unwind_safe::UnwindSafe for loop_engine::engine::embedding::error::EmbeddingError
+pub struct loop_engine::engine::embedding::OpenAiCompatibleEmbedder
+impl loop_engine::engine::embedding::openai_compatible::OpenAiCompatibleEmbedder
+pub fn loop_engine::engine::embedding::openai_compatible::OpenAiCompatibleEmbedder::from_env() -> core::result::Result<Self, loop_engine::engine::embedding::error::EmbeddingError>
+pub fn loop_engine::engine::embedding::openai_compatible::OpenAiCompatibleEmbedder::new(base_url: impl core::convert::Into<alloc::string::String>, model: impl core::convert::Into<alloc::string::String>, api_key: core::option::Option<alloc::string::String>, dimensions: usize) -> core::result::Result<Self, loop_engine::engine::embedding::error::EmbeddingError>
+pub fn loop_engine::engine::embedding::openai_compatible::OpenAiCompatibleEmbedder::ollama_qwen3_4b() -> core::result::Result<Self, loop_engine::engine::embedding::error::EmbeddingError>
+impl core::clone::Clone for loop_engine::engine::embedding::openai_compatible::OpenAiCompatibleEmbedder
+pub fn loop_engine::engine::embedding::openai_compatible::OpenAiCompatibleEmbedder::clone(&self) -> loop_engine::engine::embedding::openai_compatible::OpenAiCompatibleEmbedder
+impl core::fmt::Debug for loop_engine::engine::embedding::openai_compatible::OpenAiCompatibleEmbedder
+pub fn loop_engine::engine::embedding::openai_compatible::OpenAiCompatibleEmbedder::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl loop_engine::engine::embedding::Embedder for loop_engine::engine::embedding::openai_compatible::OpenAiCompatibleEmbedder
+pub fn loop_engine::engine::embedding::openai_compatible::OpenAiCompatibleEmbedder::dimensions(&self) -> usize
+pub fn loop_engine::engine::embedding::openai_compatible::OpenAiCompatibleEmbedder::embed<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, _ctx: &'life1 loop_engine::engine::context::Context, texts: &'life2 [alloc::string::String]) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<alloc::vec::Vec<f32>>, loop_engine::engine::embedding::error::EmbeddingError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+impl core::marker::Freeze for loop_engine::engine::embedding::openai_compatible::OpenAiCompatibleEmbedder
+impl core::marker::Send for loop_engine::engine::embedding::openai_compatible::OpenAiCompatibleEmbedder
+impl core::marker::Sync for loop_engine::engine::embedding::openai_compatible::OpenAiCompatibleEmbedder
+impl core::marker::Unpin for loop_engine::engine::embedding::openai_compatible::OpenAiCompatibleEmbedder
+impl core::marker::UnsafeUnpin for loop_engine::engine::embedding::openai_compatible::OpenAiCompatibleEmbedder
+impl !core::panic::unwind_safe::RefUnwindSafe for loop_engine::engine::embedding::openai_compatible::OpenAiCompatibleEmbedder
+impl !core::panic::unwind_safe::UnwindSafe for loop_engine::engine::embedding::openai_compatible::OpenAiCompatibleEmbedder
 pub trait loop_engine::engine::embedding::Embedder: core::marker::Send + core::marker::Sync + core::fmt::Debug + loop_engine::engine::embedding::sealed::Sealed
 pub fn loop_engine::engine::embedding::Embedder::dimensions(&self) -> usize
 pub fn loop_engine::engine::embedding::Embedder::embed<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, ctx: &'life1 loop_engine::engine::context::Context, texts: &'life2 [alloc::string::String]) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<alloc::vec::Vec<f32>>, loop_engine::engine::embedding::error::EmbeddingError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+impl loop_engine::engine::embedding::Embedder for loop_engine::engine::embedding::openai_compatible::OpenAiCompatibleEmbedder
+pub fn loop_engine::engine::embedding::openai_compatible::OpenAiCompatibleEmbedder::dimensions(&self) -> usize
+pub fn loop_engine::engine::embedding::openai_compatible::OpenAiCompatibleEmbedder::embed<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, _ctx: &'life1 loop_engine::engine::context::Context, texts: &'life2 [alloc::string::String]) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<alloc::vec::Vec<f32>>, loop_engine::engine::embedding::error::EmbeddingError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 pub mod loop_engine::engine::error
 #[non_exhaustive] pub enum loop_engine::engine::error::EngineError
 pub loop_engine::engine::error::EngineError::CasContended
@@ -672,6 +715,9 @@ pub loop_engine::engine::lessons::gate::BlockReason::FutureCreatedAt::frontmatte
 pub loop_engine::engine::lessons::gate::BlockReason::InsufficientAppliedCount
 pub loop_engine::engine::lessons::gate::BlockReason::InsufficientAppliedCount::observed: u64
 pub loop_engine::engine::lessons::gate::BlockReason::InsufficientAppliedCount::required: u64
+pub loop_engine::engine::lessons::gate::BlockReason::InsufficientOriginDiversity
+pub loop_engine::engine::lessons::gate::BlockReason::InsufficientOriginDiversity::observed: u32
+pub loop_engine::engine::lessons::gate::BlockReason::InsufficientOriginDiversity::required: u32
 pub loop_engine::engine::lessons::gate::BlockReason::MalformedCreatedAt
 pub loop_engine::engine::lessons::gate::BlockReason::MalformedCreatedAt::value: alloc::string::String
 pub loop_engine::engine::lessons::gate::BlockReason::MissingCausalNarrative
@@ -733,6 +779,7 @@ pub loop_engine::engine::lessons::gate::PassReason::CausalNarrativeOk
 pub loop_engine::engine::lessons::gate::PassReason::HasExternalSignalSources
 pub loop_engine::engine::lessons::gate::PassReason::NoTamperDetected
 pub loop_engine::engine::lessons::gate::PassReason::NoThumbsDown
+pub loop_engine::engine::lessons::gate::PassReason::OriginDiverse
 impl core::clone::Clone for loop_engine::engine::lessons::gate::PassReason
 pub fn loop_engine::engine::lessons::gate::PassReason::clone(&self) -> loop_engine::engine::lessons::gate::PassReason
 impl core::cmp::Eq for loop_engine::engine::lessons::gate::PassReason
@@ -751,6 +798,7 @@ impl core::panic::unwind_safe::UnwindSafe for loop_engine::engine::lessons::gate
 #[non_exhaustive] pub struct loop_engine::engine::lessons::gate::PromotionConfig
 pub loop_engine::engine::lessons::gate::PromotionConfig::min_age: chrono::Duration
 pub loop_engine::engine::lessons::gate::PromotionConfig::min_applied_count: u64
+pub loop_engine::engine::lessons::gate::PromotionConfig::min_distinct_origins: u32
 pub loop_engine::engine::lessons::gate::PromotionConfig::tamper_skew_tolerance: chrono::Duration
 impl core::clone::Clone for loop_engine::engine::lessons::gate::PromotionConfig
 pub fn loop_engine::engine::lessons::gate::PromotionConfig::clone(&self) -> loop_engine::engine::lessons::gate::PromotionConfig
@@ -765,7 +813,9 @@ impl core::marker::Unpin for loop_engine::engine::lessons::gate::PromotionConfig
 impl core::marker::UnsafeUnpin for loop_engine::engine::lessons::gate::PromotionConfig
 impl core::panic::unwind_safe::RefUnwindSafe for loop_engine::engine::lessons::gate::PromotionConfig
 impl core::panic::unwind_safe::UnwindSafe for loop_engine::engine::lessons::gate::PromotionConfig
+pub const loop_engine::engine::lessons::gate::MAX_APPLIED_SESSION_IDS: usize
 pub fn loop_engine::engine::lessons::gate::check_promotion_gate(fm: &loop_engine::yaml::LessonFrontmatter, metadata: &loop_engine::engine::storage::metadata::StorageMetadata, config: &loop_engine::engine::lessons::gate::PromotionConfig, now: chrono::datetime::DateTime<chrono::offset::utc::Utc>) -> loop_engine::engine::lessons::gate::GateDecision
+pub fn loop_engine::engine::lessons::gate::derive_origin_diverse(fm: &loop_engine::yaml::LessonFrontmatter) -> bool
 pub mod loop_engine::engine::lessons::loader
 #[non_exhaustive] pub struct loop_engine::engine::lessons::loader::LoadedLesson
 pub loop_engine::engine::lessons::loader::LoadedLesson::body: alloc::string::String
@@ -916,6 +966,9 @@ pub loop_engine::engine::lessons::BlockReason::FutureCreatedAt::frontmatter_crea
 pub loop_engine::engine::lessons::BlockReason::InsufficientAppliedCount
 pub loop_engine::engine::lessons::BlockReason::InsufficientAppliedCount::observed: u64
 pub loop_engine::engine::lessons::BlockReason::InsufficientAppliedCount::required: u64
+pub loop_engine::engine::lessons::BlockReason::InsufficientOriginDiversity
+pub loop_engine::engine::lessons::BlockReason::InsufficientOriginDiversity::observed: u32
+pub loop_engine::engine::lessons::BlockReason::InsufficientOriginDiversity::required: u32
 pub loop_engine::engine::lessons::BlockReason::MalformedCreatedAt
 pub loop_engine::engine::lessons::BlockReason::MalformedCreatedAt::value: alloc::string::String
 pub loop_engine::engine::lessons::BlockReason::MissingCausalNarrative
@@ -998,6 +1051,7 @@ pub loop_engine::engine::lessons::PassReason::CausalNarrativeOk
 pub loop_engine::engine::lessons::PassReason::HasExternalSignalSources
 pub loop_engine::engine::lessons::PassReason::NoTamperDetected
 pub loop_engine::engine::lessons::PassReason::NoThumbsDown
+pub loop_engine::engine::lessons::PassReason::OriginDiverse
 impl core::clone::Clone for loop_engine::engine::lessons::gate::PassReason
 pub fn loop_engine::engine::lessons::gate::PassReason::clone(&self) -> loop_engine::engine::lessons::gate::PassReason
 impl core::cmp::Eq for loop_engine::engine::lessons::gate::PassReason
@@ -1117,6 +1171,7 @@ impl core::panic::unwind_safe::UnwindSafe for loop_engine::engine::lessons::narr
 #[non_exhaustive] pub struct loop_engine::engine::lessons::PromotionConfig
 pub loop_engine::engine::lessons::PromotionConfig::min_age: chrono::Duration
 pub loop_engine::engine::lessons::PromotionConfig::min_applied_count: u64
+pub loop_engine::engine::lessons::PromotionConfig::min_distinct_origins: u32
 pub loop_engine::engine::lessons::PromotionConfig::tamper_skew_tolerance: chrono::Duration
 impl core::clone::Clone for loop_engine::engine::lessons::gate::PromotionConfig
 pub fn loop_engine::engine::lessons::gate::PromotionConfig::clone(&self) -> loop_engine::engine::lessons::gate::PromotionConfig
@@ -1601,6 +1656,36 @@ impl core::panic::unwind_safe::RefUnwindSafe for loop_engine::engine::memory::li
 impl core::panic::unwind_safe::UnwindSafe for loop_engine::engine::memory::lifecycle::RecomputeStats
 pub async fn loop_engine::engine::memory::lifecycle::get_by_id_chasing_derived_from(ctx: &loop_engine::engine::context::Context, storage: &dyn loop_engine::engine::storage::Storage, target: &loop_engine::engine::memory::id::MemoryId) -> core::result::Result<core::option::Option<loop_engine::engine::memory::Memory>, loop_engine::engine::error::EngineError>
 pub async fn loop_engine::engine::memory::lifecycle::recompute_citation_counts(ctx: &loop_engine::engine::context::Context, storage: &dyn loop_engine::engine::storage::Storage) -> core::result::Result<loop_engine::engine::memory::lifecycle::RecomputeStats, loop_engine::engine::error::EngineError>
+pub mod loop_engine::engine::memory::origin
+pub struct loop_engine::engine::memory::origin::MemoryOrigin
+pub loop_engine::engine::memory::origin::MemoryOrigin::cwd_basename: core::option::Option<alloc::string::String>
+pub loop_engine::engine::memory::origin::MemoryOrigin::host: core::option::Option<alloc::string::String>
+pub loop_engine::engine::memory::origin::MemoryOrigin::model: core::option::Option<alloc::string::String>
+pub loop_engine::engine::memory::origin::MemoryOrigin::session_id: core::option::Option<alloc::string::String>
+pub loop_engine::engine::memory::origin::MemoryOrigin::written_at: core::option::Option<alloc::string::String>
+impl loop_engine::engine::memory::origin::MemoryOrigin
+pub fn loop_engine::engine::memory::origin::MemoryOrigin::is_empty(&self) -> bool
+impl core::clone::Clone for loop_engine::engine::memory::origin::MemoryOrigin
+pub fn loop_engine::engine::memory::origin::MemoryOrigin::clone(&self) -> loop_engine::engine::memory::origin::MemoryOrigin
+impl core::cmp::Eq for loop_engine::engine::memory::origin::MemoryOrigin
+impl core::cmp::PartialEq for loop_engine::engine::memory::origin::MemoryOrigin
+pub fn loop_engine::engine::memory::origin::MemoryOrigin::eq(&self, other: &loop_engine::engine::memory::origin::MemoryOrigin) -> bool
+impl core::default::Default for loop_engine::engine::memory::origin::MemoryOrigin
+pub fn loop_engine::engine::memory::origin::MemoryOrigin::default() -> loop_engine::engine::memory::origin::MemoryOrigin
+impl core::fmt::Debug for loop_engine::engine::memory::origin::MemoryOrigin
+pub fn loop_engine::engine::memory::origin::MemoryOrigin::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for loop_engine::engine::memory::origin::MemoryOrigin
+impl serde_core::ser::Serialize for loop_engine::engine::memory::origin::MemoryOrigin
+pub fn loop_engine::engine::memory::origin::MemoryOrigin::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for loop_engine::engine::memory::origin::MemoryOrigin
+pub fn loop_engine::engine::memory::origin::MemoryOrigin::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for loop_engine::engine::memory::origin::MemoryOrigin
+impl core::marker::Send for loop_engine::engine::memory::origin::MemoryOrigin
+impl core::marker::Sync for loop_engine::engine::memory::origin::MemoryOrigin
+impl core::marker::Unpin for loop_engine::engine::memory::origin::MemoryOrigin
+impl core::marker::UnsafeUnpin for loop_engine::engine::memory::origin::MemoryOrigin
+impl core::panic::unwind_safe::RefUnwindSafe for loop_engine::engine::memory::origin::MemoryOrigin
+impl core::panic::unwind_safe::UnwindSafe for loop_engine::engine::memory::origin::MemoryOrigin
 pub mod loop_engine::engine::memory::scope
 #[non_exhaustive] pub enum loop_engine::engine::memory::scope::MemoryScope
 pub loop_engine::engine::memory::scope::MemoryScope::Global
@@ -1653,14 +1738,36 @@ impl core::marker::UnsafeUnpin for loop_engine::engine::memory::scope::MemorySco
 impl core::panic::unwind_safe::RefUnwindSafe for loop_engine::engine::memory::scope::MemoryScopeFilter
 impl core::panic::unwind_safe::UnwindSafe for loop_engine::engine::memory::scope::MemoryScopeFilter
 pub mod loop_engine::engine::memory::store
+pub struct loop_engine::engine::memory::store::RehydrateStats
+pub loop_engine::engine::memory::store::RehydrateStats::inserted: usize
+pub loop_engine::engine::memory::store::RehydrateStats::scanned: usize
+pub loop_engine::engine::memory::store::RehydrateStats::skipped_missing_vec: usize
+pub loop_engine::engine::memory::store::RehydrateStats::skipped_parse_error: usize
+impl core::clone::Clone for loop_engine::engine::memory::store::RehydrateStats
+pub fn loop_engine::engine::memory::store::RehydrateStats::clone(&self) -> loop_engine::engine::memory::store::RehydrateStats
+impl core::default::Default for loop_engine::engine::memory::store::RehydrateStats
+pub fn loop_engine::engine::memory::store::RehydrateStats::default() -> loop_engine::engine::memory::store::RehydrateStats
+impl core::fmt::Debug for loop_engine::engine::memory::store::RehydrateStats
+pub fn loop_engine::engine::memory::store::RehydrateStats::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for loop_engine::engine::memory::store::RehydrateStats
+impl core::marker::Freeze for loop_engine::engine::memory::store::RehydrateStats
+impl core::marker::Send for loop_engine::engine::memory::store::RehydrateStats
+impl core::marker::Sync for loop_engine::engine::memory::store::RehydrateStats
+impl core::marker::Unpin for loop_engine::engine::memory::store::RehydrateStats
+impl core::marker::UnsafeUnpin for loop_engine::engine::memory::store::RehydrateStats
+impl core::panic::unwind_safe::RefUnwindSafe for loop_engine::engine::memory::store::RehydrateStats
+impl core::panic::unwind_safe::UnwindSafe for loop_engine::engine::memory::store::RehydrateStats
 pub async fn loop_engine::engine::memory::store::delete(ctx: &loop_engine::engine::context::Context, storage: &dyn loop_engine::engine::storage::Storage, vector_index: &dyn loop_engine::engine::vector::VectorIndex, id: &loop_engine::engine::memory::id::MemoryId, force: bool) -> core::result::Result<(), loop_engine::engine::error::EngineError>
 pub async fn loop_engine::engine::memory::store::get_by_id(ctx: &loop_engine::engine::context::Context, storage: &dyn loop_engine::engine::storage::Storage, id: &loop_engine::engine::memory::id::MemoryId) -> core::result::Result<core::option::Option<loop_engine::engine::memory::Memory>, loop_engine::engine::error::EngineError>
 pub async fn loop_engine::engine::memory::store::get_by_id_with_embedding(ctx: &loop_engine::engine::context::Context, storage: &dyn loop_engine::engine::storage::Storage, id: &loop_engine::engine::memory::id::MemoryId, expected_dims: usize) -> core::result::Result<core::option::Option<loop_engine::engine::memory::Memory>, loop_engine::engine::error::EngineError>
 pub async fn loop_engine::engine::memory::store::increment_citation_count(ctx: &loop_engine::engine::context::Context, storage: &dyn loop_engine::engine::storage::Storage, id: &loop_engine::engine::memory::id::MemoryId) -> core::result::Result<(), loop_engine::engine::error::EngineError>
 pub async fn loop_engine::engine::memory::store::insert(ctx: &loop_engine::engine::context::Context, storage: &dyn loop_engine::engine::storage::Storage, embedder: &dyn loop_engine::engine::embedding::Embedder, vector_index: &dyn loop_engine::engine::vector::VectorIndex, id: loop_engine::engine::memory::id::MemoryId, description: impl core::convert::Into<alloc::string::String>, content: impl core::convert::Into<alloc::string::String>, now: chrono::datetime::DateTime<chrono::offset::utc::Utc>) -> core::result::Result<loop_engine::engine::memory::Memory, loop_engine::engine::error::EngineError>
 pub async fn loop_engine::engine::memory::store::insert_scoped(ctx: &loop_engine::engine::context::Context, storage: &dyn loop_engine::engine::storage::Storage, embedder: &dyn loop_engine::engine::embedding::Embedder, vector_index: &dyn loop_engine::engine::vector::VectorIndex, id: loop_engine::engine::memory::id::MemoryId, description: impl core::convert::Into<alloc::string::String>, content: impl core::convert::Into<alloc::string::String>, now: chrono::datetime::DateTime<chrono::offset::utc::Utc>, scope: loop_engine::engine::memory::scope::MemoryScope) -> core::result::Result<loop_engine::engine::memory::Memory, loop_engine::engine::error::EngineError>
+pub async fn loop_engine::engine::memory::store::insert_with_provenance(ctx: &loop_engine::engine::context::Context, storage: &dyn loop_engine::engine::storage::Storage, embedder: &dyn loop_engine::engine::embedding::Embedder, vector_index: &dyn loop_engine::engine::vector::VectorIndex, id: loop_engine::engine::memory::id::MemoryId, description: impl core::convert::Into<alloc::string::String>, content: impl core::convert::Into<alloc::string::String>, now: chrono::datetime::DateTime<chrono::offset::utc::Utc>, scope: loop_engine::engine::memory::scope::MemoryScope, origin: core::option::Option<loop_engine::engine::memory::origin::MemoryOrigin>) -> core::result::Result<loop_engine::engine::memory::Memory, loop_engine::engine::error::EngineError>
 pub async fn loop_engine::engine::memory::store::prune(ctx: &loop_engine::engine::context::Context, storage: &dyn loop_engine::engine::storage::Storage, vector_index: &dyn loop_engine::engine::vector::VectorIndex, predicate: loop_engine::engine::memory::PrunePredicate) -> core::result::Result<loop_engine::engine::memory::PruneStats, loop_engine::engine::error::EngineError>
-pub async fn loop_engine::engine::memory::store::search(ctx: &loop_engine::engine::context::Context, storage: &dyn loop_engine::engine::storage::Storage, embedder: &dyn loop_engine::engine::embedding::Embedder, vector_index: &dyn loop_engine::engine::vector::VectorIndex, query: &loop_engine::engine::memory::MemoryQuery, k: usize, body_preview_len: usize) -> core::result::Result<alloc::vec::Vec<loop_engine::engine::memory::MemoryRef>, loop_engine::engine::error::EngineError>
+pub async fn loop_engine::engine::memory::store::rehydrate_vector_index(ctx: &loop_engine::engine::context::Context, storage: &dyn loop_engine::engine::storage::Storage, vector_index: &dyn loop_engine::engine::vector::VectorIndex, expected_dims: usize) -> core::result::Result<loop_engine::engine::memory::store::RehydrateStats, loop_engine::engine::error::EngineError>
+pub async fn loop_engine::engine::memory::store::search(ctx: &loop_engine::engine::context::Context, storage: &dyn loop_engine::engine::storage::Storage, embedder: &dyn loop_engine::engine::embedding::Embedder, vector_index: &dyn loop_engine::engine::vector::VectorIndex, query: &loop_engine::engine::memory::MemoryQuery, k: usize, body_preview_len: usize, scope_filter: core::option::Option<&loop_engine::engine::memory::scope::MemoryScopeFilter>) -> core::result::Result<alloc::vec::Vec<loop_engine::engine::memory::MemoryRef>, loop_engine::engine::error::EngineError>
+pub async fn loop_engine::engine::memory::store::update(ctx: &loop_engine::engine::context::Context, storage: &dyn loop_engine::engine::storage::Storage, embedder: &dyn loop_engine::engine::embedding::Embedder, vector_index: &dyn loop_engine::engine::vector::VectorIndex, id: &loop_engine::engine::memory::id::MemoryId, description: core::option::Option<alloc::string::String>, content: core::option::Option<alloc::string::String>, scope: core::option::Option<loop_engine::engine::memory::scope::MemoryScope>, now: chrono::datetime::DateTime<chrono::offset::utc::Utc>) -> core::result::Result<core::option::Option<loop_engine::engine::memory::Memory>, loop_engine::engine::error::EngineError>
 #[non_exhaustive] pub enum loop_engine::engine::memory::CompressionWindow
 pub loop_engine::engine::memory::CompressionWindow::Ids(alloc::vec::Vec<loop_engine::engine::memory::id::MemoryId>)
 pub loop_engine::engine::memory::CompressionWindow::Predicate(loop_engine::engine::memory::PrunePredicate)
@@ -1780,10 +1887,12 @@ pub loop_engine::engine::memory::MemoryFrontmatter::created_at: alloc::string::S
 pub loop_engine::engine::memory::MemoryFrontmatter::derived_from: alloc::vec::Vec<loop_engine::engine::memory::id::MemoryId>
 pub loop_engine::engine::memory::MemoryFrontmatter::description: alloc::string::String
 pub loop_engine::engine::memory::MemoryFrontmatter::id: loop_engine::engine::memory::id::MemoryId
+pub loop_engine::engine::memory::MemoryFrontmatter::origin: core::option::Option<loop_engine::engine::memory::origin::MemoryOrigin>
 pub loop_engine::engine::memory::MemoryFrontmatter::scope: loop_engine::engine::memory::scope::MemoryScope
 pub loop_engine::engine::memory::MemoryFrontmatter::updated_at: core::option::Option<alloc::string::String>
 impl loop_engine::engine::memory::MemoryFrontmatter
 pub fn loop_engine::engine::memory::MemoryFrontmatter::new(id: loop_engine::engine::memory::id::MemoryId, description: impl core::convert::Into<alloc::string::String>, created_at: chrono::datetime::DateTime<chrono::offset::utc::Utc>) -> Self
+pub fn loop_engine::engine::memory::MemoryFrontmatter::with_origin(self, origin: loop_engine::engine::memory::origin::MemoryOrigin) -> Self
 pub fn loop_engine::engine::memory::MemoryFrontmatter::with_scope(self, scope: loop_engine::engine::memory::scope::MemoryScope) -> Self
 impl core::clone::Clone for loop_engine::engine::memory::MemoryFrontmatter
 pub fn loop_engine::engine::memory::MemoryFrontmatter::clone(&self) -> loop_engine::engine::memory::MemoryFrontmatter
@@ -1837,6 +1946,35 @@ impl core::marker::Unpin for loop_engine::engine::memory::id::MemoryId
 impl core::marker::UnsafeUnpin for loop_engine::engine::memory::id::MemoryId
 impl core::panic::unwind_safe::RefUnwindSafe for loop_engine::engine::memory::id::MemoryId
 impl core::panic::unwind_safe::UnwindSafe for loop_engine::engine::memory::id::MemoryId
+pub struct loop_engine::engine::memory::MemoryOrigin
+pub loop_engine::engine::memory::MemoryOrigin::cwd_basename: core::option::Option<alloc::string::String>
+pub loop_engine::engine::memory::MemoryOrigin::host: core::option::Option<alloc::string::String>
+pub loop_engine::engine::memory::MemoryOrigin::model: core::option::Option<alloc::string::String>
+pub loop_engine::engine::memory::MemoryOrigin::session_id: core::option::Option<alloc::string::String>
+pub loop_engine::engine::memory::MemoryOrigin::written_at: core::option::Option<alloc::string::String>
+impl loop_engine::engine::memory::origin::MemoryOrigin
+pub fn loop_engine::engine::memory::origin::MemoryOrigin::is_empty(&self) -> bool
+impl core::clone::Clone for loop_engine::engine::memory::origin::MemoryOrigin
+pub fn loop_engine::engine::memory::origin::MemoryOrigin::clone(&self) -> loop_engine::engine::memory::origin::MemoryOrigin
+impl core::cmp::Eq for loop_engine::engine::memory::origin::MemoryOrigin
+impl core::cmp::PartialEq for loop_engine::engine::memory::origin::MemoryOrigin
+pub fn loop_engine::engine::memory::origin::MemoryOrigin::eq(&self, other: &loop_engine::engine::memory::origin::MemoryOrigin) -> bool
+impl core::default::Default for loop_engine::engine::memory::origin::MemoryOrigin
+pub fn loop_engine::engine::memory::origin::MemoryOrigin::default() -> loop_engine::engine::memory::origin::MemoryOrigin
+impl core::fmt::Debug for loop_engine::engine::memory::origin::MemoryOrigin
+pub fn loop_engine::engine::memory::origin::MemoryOrigin::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for loop_engine::engine::memory::origin::MemoryOrigin
+impl serde_core::ser::Serialize for loop_engine::engine::memory::origin::MemoryOrigin
+pub fn loop_engine::engine::memory::origin::MemoryOrigin::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for loop_engine::engine::memory::origin::MemoryOrigin
+pub fn loop_engine::engine::memory::origin::MemoryOrigin::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for loop_engine::engine::memory::origin::MemoryOrigin
+impl core::marker::Send for loop_engine::engine::memory::origin::MemoryOrigin
+impl core::marker::Sync for loop_engine::engine::memory::origin::MemoryOrigin
+impl core::marker::Unpin for loop_engine::engine::memory::origin::MemoryOrigin
+impl core::marker::UnsafeUnpin for loop_engine::engine::memory::origin::MemoryOrigin
+impl core::panic::unwind_safe::RefUnwindSafe for loop_engine::engine::memory::origin::MemoryOrigin
+impl core::panic::unwind_safe::UnwindSafe for loop_engine::engine::memory::origin::MemoryOrigin
 #[non_exhaustive] pub struct loop_engine::engine::memory::MemoryRef
 pub loop_engine::engine::memory::MemoryRef::body_preview: alloc::string::String
 pub loop_engine::engine::memory::MemoryRef::description: alloc::string::String
@@ -1895,6 +2033,25 @@ impl core::marker::Unpin for loop_engine::engine::memory::lifecycle::RecomputeSt
 impl core::marker::UnsafeUnpin for loop_engine::engine::memory::lifecycle::RecomputeStats
 impl core::panic::unwind_safe::RefUnwindSafe for loop_engine::engine::memory::lifecycle::RecomputeStats
 impl core::panic::unwind_safe::UnwindSafe for loop_engine::engine::memory::lifecycle::RecomputeStats
+pub struct loop_engine::engine::memory::RehydrateStats
+pub loop_engine::engine::memory::RehydrateStats::inserted: usize
+pub loop_engine::engine::memory::RehydrateStats::scanned: usize
+pub loop_engine::engine::memory::RehydrateStats::skipped_missing_vec: usize
+pub loop_engine::engine::memory::RehydrateStats::skipped_parse_error: usize
+impl core::clone::Clone for loop_engine::engine::memory::store::RehydrateStats
+pub fn loop_engine::engine::memory::store::RehydrateStats::clone(&self) -> loop_engine::engine::memory::store::RehydrateStats
+impl core::default::Default for loop_engine::engine::memory::store::RehydrateStats
+pub fn loop_engine::engine::memory::store::RehydrateStats::default() -> loop_engine::engine::memory::store::RehydrateStats
+impl core::fmt::Debug for loop_engine::engine::memory::store::RehydrateStats
+pub fn loop_engine::engine::memory::store::RehydrateStats::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for loop_engine::engine::memory::store::RehydrateStats
+impl core::marker::Freeze for loop_engine::engine::memory::store::RehydrateStats
+impl core::marker::Send for loop_engine::engine::memory::store::RehydrateStats
+impl core::marker::Sync for loop_engine::engine::memory::store::RehydrateStats
+impl core::marker::Unpin for loop_engine::engine::memory::store::RehydrateStats
+impl core::marker::UnsafeUnpin for loop_engine::engine::memory::store::RehydrateStats
+impl core::panic::unwind_safe::RefUnwindSafe for loop_engine::engine::memory::store::RehydrateStats
+impl core::panic::unwind_safe::UnwindSafe for loop_engine::engine::memory::store::RehydrateStats
 pub async fn loop_engine::engine::memory::compress(ctx: &loop_engine::engine::context::Context, storage: &dyn loop_engine::engine::storage::Storage, llm: &dyn loop_engine::engine::llm::LlmClient, embedder: &dyn loop_engine::engine::embedding::Embedder, vector_index: &dyn loop_engine::engine::vector::VectorIndex, window: loop_engine::engine::memory::compress::CompressionWindow, config: &loop_engine::engine::memory::compress::CompressionConfig, now: chrono::datetime::DateTime<chrono::offset::utc::Utc>) -> core::result::Result<loop_engine::engine::memory::Memory, loop_engine::engine::error::EngineError>
 pub async fn loop_engine::engine::memory::delete(ctx: &loop_engine::engine::context::Context, storage: &dyn loop_engine::engine::storage::Storage, vector_index: &dyn loop_engine::engine::vector::VectorIndex, id: &loop_engine::engine::memory::id::MemoryId, force: bool) -> core::result::Result<(), loop_engine::engine::error::EngineError>
 pub async fn loop_engine::engine::memory::get_by_id(ctx: &loop_engine::engine::context::Context, storage: &dyn loop_engine::engine::storage::Storage, id: &loop_engine::engine::memory::id::MemoryId) -> core::result::Result<core::option::Option<loop_engine::engine::memory::Memory>, loop_engine::engine::error::EngineError>
@@ -1903,9 +2060,12 @@ pub async fn loop_engine::engine::memory::get_by_id_with_embedding(ctx: &loop_en
 pub async fn loop_engine::engine::memory::increment_citation_count(ctx: &loop_engine::engine::context::Context, storage: &dyn loop_engine::engine::storage::Storage, id: &loop_engine::engine::memory::id::MemoryId) -> core::result::Result<(), loop_engine::engine::error::EngineError>
 pub async fn loop_engine::engine::memory::insert(ctx: &loop_engine::engine::context::Context, storage: &dyn loop_engine::engine::storage::Storage, embedder: &dyn loop_engine::engine::embedding::Embedder, vector_index: &dyn loop_engine::engine::vector::VectorIndex, id: loop_engine::engine::memory::id::MemoryId, description: impl core::convert::Into<alloc::string::String>, content: impl core::convert::Into<alloc::string::String>, now: chrono::datetime::DateTime<chrono::offset::utc::Utc>) -> core::result::Result<loop_engine::engine::memory::Memory, loop_engine::engine::error::EngineError>
 pub async fn loop_engine::engine::memory::insert_scoped(ctx: &loop_engine::engine::context::Context, storage: &dyn loop_engine::engine::storage::Storage, embedder: &dyn loop_engine::engine::embedding::Embedder, vector_index: &dyn loop_engine::engine::vector::VectorIndex, id: loop_engine::engine::memory::id::MemoryId, description: impl core::convert::Into<alloc::string::String>, content: impl core::convert::Into<alloc::string::String>, now: chrono::datetime::DateTime<chrono::offset::utc::Utc>, scope: loop_engine::engine::memory::scope::MemoryScope) -> core::result::Result<loop_engine::engine::memory::Memory, loop_engine::engine::error::EngineError>
+pub async fn loop_engine::engine::memory::insert_with_provenance(ctx: &loop_engine::engine::context::Context, storage: &dyn loop_engine::engine::storage::Storage, embedder: &dyn loop_engine::engine::embedding::Embedder, vector_index: &dyn loop_engine::engine::vector::VectorIndex, id: loop_engine::engine::memory::id::MemoryId, description: impl core::convert::Into<alloc::string::String>, content: impl core::convert::Into<alloc::string::String>, now: chrono::datetime::DateTime<chrono::offset::utc::Utc>, scope: loop_engine::engine::memory::scope::MemoryScope, origin: core::option::Option<loop_engine::engine::memory::origin::MemoryOrigin>) -> core::result::Result<loop_engine::engine::memory::Memory, loop_engine::engine::error::EngineError>
 pub async fn loop_engine::engine::memory::prune(ctx: &loop_engine::engine::context::Context, storage: &dyn loop_engine::engine::storage::Storage, vector_index: &dyn loop_engine::engine::vector::VectorIndex, predicate: loop_engine::engine::memory::PrunePredicate) -> core::result::Result<loop_engine::engine::memory::PruneStats, loop_engine::engine::error::EngineError>
 pub async fn loop_engine::engine::memory::recompute_citation_counts(ctx: &loop_engine::engine::context::Context, storage: &dyn loop_engine::engine::storage::Storage) -> core::result::Result<loop_engine::engine::memory::lifecycle::RecomputeStats, loop_engine::engine::error::EngineError>
-pub async fn loop_engine::engine::memory::search(ctx: &loop_engine::engine::context::Context, storage: &dyn loop_engine::engine::storage::Storage, embedder: &dyn loop_engine::engine::embedding::Embedder, vector_index: &dyn loop_engine::engine::vector::VectorIndex, query: &loop_engine::engine::memory::MemoryQuery, k: usize, body_preview_len: usize) -> core::result::Result<alloc::vec::Vec<loop_engine::engine::memory::MemoryRef>, loop_engine::engine::error::EngineError>
+pub async fn loop_engine::engine::memory::rehydrate_vector_index(ctx: &loop_engine::engine::context::Context, storage: &dyn loop_engine::engine::storage::Storage, vector_index: &dyn loop_engine::engine::vector::VectorIndex, expected_dims: usize) -> core::result::Result<loop_engine::engine::memory::store::RehydrateStats, loop_engine::engine::error::EngineError>
+pub async fn loop_engine::engine::memory::search(ctx: &loop_engine::engine::context::Context, storage: &dyn loop_engine::engine::storage::Storage, embedder: &dyn loop_engine::engine::embedding::Embedder, vector_index: &dyn loop_engine::engine::vector::VectorIndex, query: &loop_engine::engine::memory::MemoryQuery, k: usize, body_preview_len: usize, scope_filter: core::option::Option<&loop_engine::engine::memory::scope::MemoryScopeFilter>) -> core::result::Result<alloc::vec::Vec<loop_engine::engine::memory::MemoryRef>, loop_engine::engine::error::EngineError>
+pub async fn loop_engine::engine::memory::update(ctx: &loop_engine::engine::context::Context, storage: &dyn loop_engine::engine::storage::Storage, embedder: &dyn loop_engine::engine::embedding::Embedder, vector_index: &dyn loop_engine::engine::vector::VectorIndex, id: &loop_engine::engine::memory::id::MemoryId, description: core::option::Option<alloc::string::String>, content: core::option::Option<alloc::string::String>, scope: core::option::Option<loop_engine::engine::memory::scope::MemoryScope>, now: chrono::datetime::DateTime<chrono::offset::utc::Utc>) -> core::result::Result<core::option::Option<loop_engine::engine::memory::Memory>, loop_engine::engine::error::EngineError>
 pub type loop_engine::engine::memory::PrunePredicate = alloc::boxed::Box<(dyn core::ops::function::Fn(&loop_engine::engine::memory::MemoryFrontmatter) -> bool + core::marker::Send + core::marker::Sync)>
 pub mod loop_engine::engine::paths
 pub const loop_engine::engine::paths::LESSON_STATUS_DIRS: &[&str]
@@ -4616,6 +4776,7 @@ impl core::panic::unwind_safe::RefUnwindSafe for loop_engine::yaml::IngestProven
 impl core::panic::unwind_safe::UnwindSafe for loop_engine::yaml::IngestProvenance
 pub struct loop_engine::engine::yaml::LessonFrontmatter
 pub loop_engine::engine::yaml::LessonFrontmatter::applied_count: u64
+pub loop_engine::engine::yaml::LessonFrontmatter::applied_session_ids: alloc::vec::Vec<alloc::string::String>
 pub loop_engine::engine::yaml::LessonFrontmatter::authored_by: loop_engine::engine::Authorship
 pub loop_engine::engine::yaml::LessonFrontmatter::causal_narrative: core::option::Option<loop_engine::yaml::CausalNarrative>
 pub loop_engine::engine::yaml::LessonFrontmatter::created_at: alloc::string::String
@@ -4738,6 +4899,9 @@ pub loop_engine::engine::BlockReason::FutureCreatedAt::frontmatter_created_at: c
 pub loop_engine::engine::BlockReason::InsufficientAppliedCount
 pub loop_engine::engine::BlockReason::InsufficientAppliedCount::observed: u64
 pub loop_engine::engine::BlockReason::InsufficientAppliedCount::required: u64
+pub loop_engine::engine::BlockReason::InsufficientOriginDiversity
+pub loop_engine::engine::BlockReason::InsufficientOriginDiversity::observed: u32
+pub loop_engine::engine::BlockReason::InsufficientOriginDiversity::required: u32
 pub loop_engine::engine::BlockReason::MalformedCreatedAt
 pub loop_engine::engine::BlockReason::MalformedCreatedAt::value: alloc::string::String
 pub loop_engine::engine::BlockReason::MissingCausalNarrative
@@ -5221,6 +5385,7 @@ pub loop_engine::engine::PassReason::CausalNarrativeOk
 pub loop_engine::engine::PassReason::HasExternalSignalSources
 pub loop_engine::engine::PassReason::NoTamperDetected
 pub loop_engine::engine::PassReason::NoThumbsDown
+pub loop_engine::engine::PassReason::OriginDiverse
 impl core::clone::Clone for loop_engine::engine::lessons::gate::PassReason
 pub fn loop_engine::engine::lessons::gate::PassReason::clone(&self) -> loop_engine::engine::lessons::gate::PassReason
 impl core::cmp::Eq for loop_engine::engine::lessons::gate::PassReason
@@ -5800,10 +5965,12 @@ pub loop_engine::engine::MemoryFrontmatter::created_at: alloc::string::String
 pub loop_engine::engine::MemoryFrontmatter::derived_from: alloc::vec::Vec<loop_engine::engine::memory::id::MemoryId>
 pub loop_engine::engine::MemoryFrontmatter::description: alloc::string::String
 pub loop_engine::engine::MemoryFrontmatter::id: loop_engine::engine::memory::id::MemoryId
+pub loop_engine::engine::MemoryFrontmatter::origin: core::option::Option<loop_engine::engine::memory::origin::MemoryOrigin>
 pub loop_engine::engine::MemoryFrontmatter::scope: loop_engine::engine::memory::scope::MemoryScope
 pub loop_engine::engine::MemoryFrontmatter::updated_at: core::option::Option<alloc::string::String>
 impl loop_engine::engine::memory::MemoryFrontmatter
 pub fn loop_engine::engine::memory::MemoryFrontmatter::new(id: loop_engine::engine::memory::id::MemoryId, description: impl core::convert::Into<alloc::string::String>, created_at: chrono::datetime::DateTime<chrono::offset::utc::Utc>) -> Self
+pub fn loop_engine::engine::memory::MemoryFrontmatter::with_origin(self, origin: loop_engine::engine::memory::origin::MemoryOrigin) -> Self
 pub fn loop_engine::engine::memory::MemoryFrontmatter::with_scope(self, scope: loop_engine::engine::memory::scope::MemoryScope) -> Self
 impl core::clone::Clone for loop_engine::engine::memory::MemoryFrontmatter
 pub fn loop_engine::engine::memory::MemoryFrontmatter::clone(&self) -> loop_engine::engine::memory::MemoryFrontmatter
@@ -6033,6 +6200,7 @@ impl core::panic::unwind_safe::UnwindSafe for loop_engine::engine::events::Proje
 #[non_exhaustive] pub struct loop_engine::engine::PromotionConfig
 pub loop_engine::engine::PromotionConfig::min_age: chrono::Duration
 pub loop_engine::engine::PromotionConfig::min_applied_count: u64
+pub loop_engine::engine::PromotionConfig::min_distinct_origins: u32
 pub loop_engine::engine::PromotionConfig::tamper_skew_tolerance: chrono::Duration
 impl core::clone::Clone for loop_engine::engine::lessons::gate::PromotionConfig
 pub fn loop_engine::engine::lessons::gate::PromotionConfig::clone(&self) -> loop_engine::engine::lessons::gate::PromotionConfig
@@ -6494,6 +6662,9 @@ impl core::panic::unwind_safe::UnwindSafe for loop_engine::engine::storage::vers
 pub trait loop_engine::engine::Embedder: core::marker::Send + core::marker::Sync + core::fmt::Debug + loop_engine::engine::embedding::sealed::Sealed
 pub fn loop_engine::engine::Embedder::dimensions(&self) -> usize
 pub fn loop_engine::engine::Embedder::embed<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, ctx: &'life1 loop_engine::engine::context::Context, texts: &'life2 [alloc::string::String]) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<alloc::vec::Vec<f32>>, loop_engine::engine::embedding::error::EmbeddingError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+impl loop_engine::engine::embedding::Embedder for loop_engine::engine::embedding::openai_compatible::OpenAiCompatibleEmbedder
+pub fn loop_engine::engine::embedding::openai_compatible::OpenAiCompatibleEmbedder::dimensions(&self) -> usize
+pub fn loop_engine::engine::embedding::openai_compatible::OpenAiCompatibleEmbedder::embed<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, _ctx: &'life1 loop_engine::engine::context::Context, texts: &'life2 [alloc::string::String]) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<alloc::vec::Vec<f32>>, loop_engine::engine::embedding::error::EmbeddingError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 pub trait loop_engine::engine::EventSource: core::marker::Send + core::marker::Sync
 pub fn loop_engine::engine::EventSource::name(&self) -> &'static str
 pub fn loop_engine::engine::EventSource::run<'life0, 'life1, 'async_trait>(&'life0 self, ctx: &'life1 loop_engine::engine::context::Context, shutdown: tokio_util::sync::cancellation_token::CancellationToken) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = futures_core::stream::BoxStream<'static, core::result::Result<loop_engine::engine::events::EngineEvent, loop_engine::engine::events::EventSourceError>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
@@ -6569,7 +6740,7 @@ pub async fn loop_engine::engine::list_teams(ctx: &loop_engine::engine::context:
 pub async fn loop_engine::engine::promote_lesson(ctx: &loop_engine::engine::context::Context, storage: &dyn loop_engine::engine::storage::Storage, id: &str, config: &loop_engine::engine::lessons::gate::PromotionConfig, now: chrono::datetime::DateTime<chrono::offset::utc::Utc>) -> core::result::Result<loop_engine::engine::lessons::loader::LoadedLesson, loop_engine::engine::error::EngineError>
 pub async fn loop_engine::engine::prune_memories(ctx: &loop_engine::engine::context::Context, storage: &dyn loop_engine::engine::storage::Storage, vector_index: &dyn loop_engine::engine::vector::VectorIndex, predicate: loop_engine::engine::memory::PrunePredicate) -> core::result::Result<loop_engine::engine::memory::PruneStats, loop_engine::engine::error::EngineError>
 pub async fn loop_engine::engine::recompute_memory_citation_counts(ctx: &loop_engine::engine::context::Context, storage: &dyn loop_engine::engine::storage::Storage) -> core::result::Result<loop_engine::engine::memory::lifecycle::RecomputeStats, loop_engine::engine::error::EngineError>
-pub async fn loop_engine::engine::search_memories(ctx: &loop_engine::engine::context::Context, storage: &dyn loop_engine::engine::storage::Storage, embedder: &dyn loop_engine::engine::embedding::Embedder, vector_index: &dyn loop_engine::engine::vector::VectorIndex, query: &loop_engine::engine::memory::MemoryQuery, k: usize, body_preview_len: usize) -> core::result::Result<alloc::vec::Vec<loop_engine::engine::memory::MemoryRef>, loop_engine::engine::error::EngineError>
+pub async fn loop_engine::engine::search_memories(ctx: &loop_engine::engine::context::Context, storage: &dyn loop_engine::engine::storage::Storage, embedder: &dyn loop_engine::engine::embedding::Embedder, vector_index: &dyn loop_engine::engine::vector::VectorIndex, query: &loop_engine::engine::memory::MemoryQuery, k: usize, body_preview_len: usize, scope_filter: core::option::Option<&loop_engine::engine::memory::scope::MemoryScopeFilter>) -> core::result::Result<alloc::vec::Vec<loop_engine::engine::memory::MemoryRef>, loop_engine::engine::error::EngineError>
 pub async fn loop_engine::engine::supersede_lesson(ctx: &loop_engine::engine::context::Context, storage: &dyn loop_engine::engine::storage::Storage, old_id: &str, new_id: &str, force: bool, now: chrono::datetime::DateTime<chrono::offset::utc::Utc>) -> core::result::Result<loop_engine::engine::lessons::loader::LoadedLesson, loop_engine::engine::error::EngineError>
 pub async fn loop_engine::engine::update_persona<F>(ctx: &loop_engine::engine::context::Context, storage: &dyn loop_engine::engine::storage::Storage, id: &str, f: F) -> core::result::Result<loop_engine::engine::personas::Persona, loop_engine::engine::error::EngineError> where F: core::ops::function::Fn(&mut loop_engine::engine::personas::PersonaFrontmatter, &mut alloc::string::String)
 pub async fn loop_engine::engine::update_skill<F>(ctx: &loop_engine::engine::context::Context, storage: &dyn loop_engine::engine::storage::Storage, id: &str, f: F) -> core::result::Result<loop_engine::engine::skills::Skill, loop_engine::engine::error::EngineError> where F: core::ops::function::Fn(&mut loop_engine::engine::skills::SkillFrontmatter, &mut alloc::string::String)
@@ -6857,6 +7028,9 @@ pub loop_engine::lessons::gate::BlockReason::FutureCreatedAt::frontmatter_create
 pub loop_engine::lessons::gate::BlockReason::InsufficientAppliedCount
 pub loop_engine::lessons::gate::BlockReason::InsufficientAppliedCount::observed: u64
 pub loop_engine::lessons::gate::BlockReason::InsufficientAppliedCount::required: u64
+pub loop_engine::lessons::gate::BlockReason::InsufficientOriginDiversity
+pub loop_engine::lessons::gate::BlockReason::InsufficientOriginDiversity::observed: u32
+pub loop_engine::lessons::gate::BlockReason::InsufficientOriginDiversity::required: u32
 pub loop_engine::lessons::gate::BlockReason::MalformedCreatedAt
 pub loop_engine::lessons::gate::BlockReason::MalformedCreatedAt::value: alloc::string::String
 pub loop_engine::lessons::gate::BlockReason::MissingCausalNarrative
@@ -6918,6 +7092,7 @@ pub loop_engine::lessons::gate::PassReason::CausalNarrativeOk
 pub loop_engine::lessons::gate::PassReason::HasExternalSignalSources
 pub loop_engine::lessons::gate::PassReason::NoTamperDetected
 pub loop_engine::lessons::gate::PassReason::NoThumbsDown
+pub loop_engine::lessons::gate::PassReason::OriginDiverse
 impl core::clone::Clone for loop_engine::engine::lessons::gate::PassReason
 pub fn loop_engine::engine::lessons::gate::PassReason::clone(&self) -> loop_engine::engine::lessons::gate::PassReason
 impl core::cmp::Eq for loop_engine::engine::lessons::gate::PassReason
@@ -6936,6 +7111,7 @@ impl core::panic::unwind_safe::UnwindSafe for loop_engine::engine::lessons::gate
 #[non_exhaustive] pub struct loop_engine::lessons::gate::PromotionConfig
 pub loop_engine::lessons::gate::PromotionConfig::min_age: chrono::Duration
 pub loop_engine::lessons::gate::PromotionConfig::min_applied_count: u64
+pub loop_engine::lessons::gate::PromotionConfig::min_distinct_origins: u32
 pub loop_engine::lessons::gate::PromotionConfig::tamper_skew_tolerance: chrono::Duration
 impl core::clone::Clone for loop_engine::engine::lessons::gate::PromotionConfig
 pub fn loop_engine::engine::lessons::gate::PromotionConfig::clone(&self) -> loop_engine::engine::lessons::gate::PromotionConfig
@@ -6950,7 +7126,9 @@ impl core::marker::Unpin for loop_engine::engine::lessons::gate::PromotionConfig
 impl core::marker::UnsafeUnpin for loop_engine::engine::lessons::gate::PromotionConfig
 impl core::panic::unwind_safe::RefUnwindSafe for loop_engine::engine::lessons::gate::PromotionConfig
 impl core::panic::unwind_safe::UnwindSafe for loop_engine::engine::lessons::gate::PromotionConfig
+pub const loop_engine::lessons::gate::MAX_APPLIED_SESSION_IDS: usize
 pub fn loop_engine::lessons::gate::check_promotion_gate(fm: &loop_engine::yaml::LessonFrontmatter, metadata: &loop_engine::engine::storage::metadata::StorageMetadata, config: &loop_engine::engine::lessons::gate::PromotionConfig, now: chrono::datetime::DateTime<chrono::offset::utc::Utc>) -> loop_engine::engine::lessons::gate::GateDecision
+pub fn loop_engine::lessons::gate::derive_origin_diverse(fm: &loop_engine::yaml::LessonFrontmatter) -> bool
 pub mod loop_engine::lessons::loader
 #[non_exhaustive] pub struct loop_engine::lessons::loader::LoadedLesson
 pub loop_engine::lessons::loader::LoadedLesson::body: alloc::string::String
@@ -7101,6 +7279,9 @@ pub loop_engine::lessons::BlockReason::FutureCreatedAt::frontmatter_created_at: 
 pub loop_engine::lessons::BlockReason::InsufficientAppliedCount
 pub loop_engine::lessons::BlockReason::InsufficientAppliedCount::observed: u64
 pub loop_engine::lessons::BlockReason::InsufficientAppliedCount::required: u64
+pub loop_engine::lessons::BlockReason::InsufficientOriginDiversity
+pub loop_engine::lessons::BlockReason::InsufficientOriginDiversity::observed: u32
+pub loop_engine::lessons::BlockReason::InsufficientOriginDiversity::required: u32
 pub loop_engine::lessons::BlockReason::MalformedCreatedAt
 pub loop_engine::lessons::BlockReason::MalformedCreatedAt::value: alloc::string::String
 pub loop_engine::lessons::BlockReason::MissingCausalNarrative
@@ -7183,6 +7364,7 @@ pub loop_engine::lessons::PassReason::CausalNarrativeOk
 pub loop_engine::lessons::PassReason::HasExternalSignalSources
 pub loop_engine::lessons::PassReason::NoTamperDetected
 pub loop_engine::lessons::PassReason::NoThumbsDown
+pub loop_engine::lessons::PassReason::OriginDiverse
 impl core::clone::Clone for loop_engine::engine::lessons::gate::PassReason
 pub fn loop_engine::engine::lessons::gate::PassReason::clone(&self) -> loop_engine::engine::lessons::gate::PassReason
 impl core::cmp::Eq for loop_engine::engine::lessons::gate::PassReason
@@ -7302,6 +7484,7 @@ impl core::panic::unwind_safe::UnwindSafe for loop_engine::engine::lessons::narr
 #[non_exhaustive] pub struct loop_engine::lessons::PromotionConfig
 pub loop_engine::lessons::PromotionConfig::min_age: chrono::Duration
 pub loop_engine::lessons::PromotionConfig::min_applied_count: u64
+pub loop_engine::lessons::PromotionConfig::min_distinct_origins: u32
 pub loop_engine::lessons::PromotionConfig::tamper_skew_tolerance: chrono::Duration
 impl core::clone::Clone for loop_engine::engine::lessons::gate::PromotionConfig
 pub fn loop_engine::engine::lessons::gate::PromotionConfig::clone(&self) -> loop_engine::engine::lessons::gate::PromotionConfig
@@ -7353,6 +7536,8 @@ pub fn loop_engine::paths::logs_dir() -> anyhow::Result<std::path::PathBuf>
 pub fn loop_engine::paths::loop_home() -> anyhow::Result<std::path::PathBuf>
 pub mod loop_engine::pid
 pub fn loop_engine::pid::pid_is_alive(pid: u32) -> bool
+pub mod loop_engine::serve
+pub async fn loop_engine::serve::run() -> anyhow::Result<()>
 pub mod loop_engine::yaml
 pub mod loop_engine::yaml::reader
 pub fn loop_engine::yaml::reader::parse_lesson_frontmatter(yaml: &str) -> anyhow::Result<loop_engine::yaml::LessonFrontmatter>
@@ -7592,6 +7777,7 @@ impl core::panic::unwind_safe::RefUnwindSafe for loop_engine::yaml::IngestProven
 impl core::panic::unwind_safe::UnwindSafe for loop_engine::yaml::IngestProvenance
 pub struct loop_engine::yaml::LessonFrontmatter
 pub loop_engine::yaml::LessonFrontmatter::applied_count: u64
+pub loop_engine::yaml::LessonFrontmatter::applied_session_ids: alloc::vec::Vec<alloc::string::String>
 pub loop_engine::yaml::LessonFrontmatter::authored_by: loop_engine::engine::Authorship
 pub loop_engine::yaml::LessonFrontmatter::causal_narrative: core::option::Option<loop_engine::yaml::CausalNarrative>
 pub loop_engine::yaml::LessonFrontmatter::created_at: alloc::string::String
