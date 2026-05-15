@@ -2196,6 +2196,9 @@ pub async fn loop_engine::engine::personas::list(ctx: &loop_engine::engine::cont
 pub async fn loop_engine::engine::personas::update<F>(ctx: &loop_engine::engine::context::Context, storage: &dyn loop_engine::engine::storage::Storage, id: &str, f: F) -> core::result::Result<loop_engine::engine::personas::Persona, loop_engine::engine::error::EngineError> where F: core::ops::function::Fn(&mut loop_engine::engine::personas::PersonaFrontmatter, &mut alloc::string::String)
 pub mod loop_engine::engine::pid
 pub fn loop_engine::engine::pid::pid_is_alive(pid: u32) -> bool
+pub mod loop_engine::engine::scoring
+pub fn loop_engine::engine::scoring::score_text_match(query: &str, description: &str, body: &str) -> f32
+pub fn loop_engine::engine::scoring::tokenize(s: &str) -> alloc::vec::Vec<alloc::string::String>
 pub mod loop_engine::engine::sentiment
 pub mod loop_engine::engine::sentiment::attribution
 pub struct loop_engine::engine::sentiment::attribution::Attribution

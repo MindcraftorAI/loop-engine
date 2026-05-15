@@ -23,6 +23,7 @@ pub mod memory;
 pub mod paths;
 pub mod personas;
 pub mod pid;
+pub mod scoring;
 pub mod sentiment;
 pub mod skills;
 pub mod storage;

@@ -44,6 +44,7 @@ use crate::engine::memory::{
     MemoryScope, MemoryScopeFilter,
 };
 use crate::engine::paths;
+use crate::engine::scoring::score_text_match;
 use crate::engine::storage::filesystem::LocalFsStorage;
 use crate::engine::storage::{Storage, StorageKey};
 use crate::engine::vector::{HnswVectorIndex, VectorIndex};
@@ -414,8 +415,7 @@ async fn lesson_recall(
                     continue;
                 }
             };
-            let haystack = format!("{} {}", fm.description, split.body);
-            let sim = score(&p.query, &haystack);
+            let sim = score_text_match(&p.query, &fm.description, &split.body);
             if sim > 0.0 {
                 results.push((
                     sim,
@@ -566,35 +566,6 @@ fn build_narrative(
         },
         generated_at: now_iso.to_string(),
     })
-}
-
-// ---- Naive text-match scoring -------------------------------------
-
-fn tokenize(s: &str) -> Vec<String> {
-    s.to_lowercase()
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { ' ' })
-        .collect::<String>()
-        .split_whitespace()
-        .filter(|t| t.len() > 1)
-        .map(|s| s.to_string())
-        .collect()
-}
-
-fn score(query: &str, haystack: &str) -> f32 {
-    let q_tokens: std::collections::HashSet<_> = tokenize(query).into_iter().collect();
-    if q_tokens.is_empty() {
-        return 0.0;
-    }
-    let h_tokens: std::collections::HashSet<_> = tokenize(haystack).into_iter().collect();
-    let overlap = q_tokens.iter().filter(|t| h_tokens.contains(*t)).count() as f32;
-    let token_score = overlap / q_tokens.len() as f32;
-    let substring_bonus = if haystack.to_lowercase().contains(&query.to_lowercase()) {
-        0.3
-    } else {
-        0.0
-    };
-    (token_score + substring_bonus).min(1.0)
 }
 
 // ---- Memory handlers ----------------------------------------------
