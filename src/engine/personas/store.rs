@@ -132,7 +132,7 @@ pub async fn archive(
             return Err(EngineError::Parse(format!("persona not found: {id}")));
         };
         let (fm, _body) = parse_file(&bytes)?;
-        if fm.authored_by.is_user() {
+        if fm.authored_by.is_immune() {
             return Err(EngineError::UserPersonaImmune { id: id.to_string() });
         }
     }
@@ -152,7 +152,7 @@ pub async fn delete(
     if !force {
         if let Some(bytes) = storage.get(&key).await? {
             let (fm, _body) = parse_file(&bytes)?;
-            if fm.authored_by.is_user() {
+            if fm.authored_by.is_immune() {
                 return Err(EngineError::UserPersonaImmune { id: id.to_string() });
             }
         }

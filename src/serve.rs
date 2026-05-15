@@ -304,6 +304,16 @@ struct LessonCreateParams {
     evidence: Vec<String>,
     #[serde(default)]
     authored_by: Option<String>,
+    /// v1.1: codex id when `authored_by == "pack"`. Ignored otherwise.
+    /// Required when `authored_by == "pack"` (validated below).
+    #[serde(default)]
+    pack_id: Option<String>,
+    /// v1.1: seed directly as promoted, bypassing the wedge gate.
+    /// Only allowed when `authored_by == "pack"` — the trust comes
+    /// from user-installing the codex (Pack provenance = user-equivalent
+    /// authorship). Default false. Rejected if Pack auth missing.
+    #[serde(default)]
+    seed_as_promoted: bool,
 }
 
 async fn lesson_create(
@@ -319,13 +329,36 @@ async fn lesson_create(
         ));
     }
     let authored_by = parse_authorship(p.authored_by.as_deref());
+    // v1.1: Pack-authored lessons must carry the codex id.
+    if matches!(authored_by, Authorship::Pack) && p.pack_id.as_deref().unwrap_or("").is_empty() {
+        return Err(DispatchError::InvalidParams(
+            "pack_id required when authored_by = \"pack\"".into(),
+        ));
+    }
+    // v1.1: seed_as_promoted only valid for Pack authorship.
+    if p.seed_as_promoted && !matches!(authored_by, Authorship::Pack) {
+        return Err(DispatchError::InvalidParams(
+            "seed_as_promoted requires authored_by = \"pack\"".into(),
+        ));
+    }
+    let pack_id = if matches!(authored_by, Authorship::Pack) {
+        p.pack_id.clone()
+    } else {
+        None
+    };
     let id = new_lesson_id();
     let created_at = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+
+    let (status, status_dir) = if p.seed_as_promoted {
+        (LessonStatus::Promoted, "promoted")
+    } else {
+        (LessonStatus::Pending, "pending")
+    };
 
     let fm = LessonFrontmatter {
         id: id.clone(),
         description: p.description.clone(),
-        status: LessonStatus::Pending,
+        status,
         created_at: created_at.clone(),
         causal_narrative: build_narrative(&p.evidence, authored_by, &created_at),
         target_skill: None,
@@ -341,23 +374,30 @@ async fn lesson_create(
         superseded_at: None,
         ingest_provenance: None,
         authored_by,
+        pack_id: pack_id.clone(),
         updated_at: None,
     };
 
     let yaml = serialize_lesson_frontmatter(&fm);
     let content = combine_frontmatter(&yaml, &p.body);
-    let key = StorageKey::lesson(ctx, "pending", &id);
+    let key = StorageKey::lesson(ctx, status_dir, &id);
     storage
         .put(&key, Bytes::from(content))
         .await
         .map_err(|e| DispatchError::Other(anyhow!("storage put failed: {e}")))?;
 
-    Ok(json!({
-        "id": id,
-        "status": "pending",
-        "authored_by": authorship_str(authored_by),
-        "created_at": created_at,
-    }))
+    let mut response = serde_json::Map::new();
+    response.insert("id".into(), Value::String(id));
+    response.insert("status".into(), Value::String(status_dir.into()));
+    response.insert(
+        "authored_by".into(),
+        Value::String(authorship_str(authored_by).into()),
+    );
+    if let Some(pid) = pack_id {
+        response.insert("pack_id".into(), Value::String(pid));
+    }
+    response.insert("created_at".into(), Value::String(created_at));
+    Ok(Value::Object(response))
 }
 
 #[derive(Deserialize)]
@@ -522,6 +562,7 @@ fn new_lesson_id() -> String {
 fn parse_authorship(s: Option<&str>) -> Authorship {
     match s {
         Some("user") => Authorship::User,
+        Some("pack") => Authorship::Pack,
         _ => Authorship::Llm,
     }
 }
@@ -529,6 +570,7 @@ fn parse_authorship(s: Option<&str>) -> Authorship {
 fn authorship_str(a: Authorship) -> &'static str {
     match a {
         Authorship::User => "user",
+        Authorship::Pack => "pack",
         _ => "agent",
     }
 }

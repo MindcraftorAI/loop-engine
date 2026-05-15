@@ -9,6 +9,34 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ## [Unreleased]
 
+### Added — v1.1 Pack-authored lesson seeding
+
+- **`Authorship::Pack` variant** — new non-exhaustive enum variant for
+  trusted-seeded lessons. Wire format: `"pack"`. Treated as user-equivalent
+  for eviction-immunity invariants (see `Authorship::is_immune`).
+- **`Authorship::is_immune(self) -> bool`** — new predicate. Returns true
+  for `User` AND `Pack`. The 9 production sites that previously gated on
+  `.is_user()` now gate on `.is_immune()` — semantic intent at those sites
+  is "is this immune from eviction?" not "literally user-authored."
+- **`LessonFrontmatter.pack_id: Option<String>`** — new optional field. Set
+  when `authored_by = Pack`, carries the codex id (e.g.
+  `"fullstack-react-atomic"`) for symmetric bulk-retirement on codex
+  uninstall. Skipped from YAML when `None` (back-compat with v0.5 lessons).
+- **`lesson.create` RPC** — accepts new `authored_by: "pack"` discriminator
+  + required `pack_id: <string>` companion field. Response includes
+  `pack_id` when present. Pre-v1.1 callers unaffected.
+
+The lesson promotion path (wedge gate) is unchanged structurally — Pack
+provides bypass *by design contract* (consumer creates Pack-authored
+lessons directly in promoted state via lesson lifecycle, not by tricking
+the gate). The wedge invariant holds: only `Authorship::Llm` / `Agent`
+lessons run through `gate::check_promotion_gate`.
+
+Engine v1.1 codex support is intentionally minimal — codex YAML format,
+storage, activation, export, 3-way merge, AI-mediated import, doc-fetch,
+verify-gates all live in the opensquid consumer. See
+`~/projects/loop/docs/engine-v1.1-substrate-design.md` for the full design.
+
 ### Added — v0.5 hybrid recall
 
 - **`engine::scoring`** module: shared `score_text_match(query, description, body)` helper

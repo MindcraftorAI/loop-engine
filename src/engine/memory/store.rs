@@ -1033,8 +1033,10 @@ pub async fn recompute_citation_counts(
                         continue;
                     }
                 };
-            // Only user-authored lessons drive immunity.
-            if !fm.authored_by.is_user() {
+            // Only user-authored OR pack-authored lessons drive immunity.
+            // Pack-authored = codex-seeded; user-installing the codex is
+            // itself an act of user authorship (see Authorship::is_immune).
+            if !fm.authored_by.is_immune() {
                 continue;
             }
             if let Some(cn) = &fm.causal_narrative {

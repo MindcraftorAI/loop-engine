@@ -81,6 +81,7 @@ async fn write_user_lesson_citing_memory(storage: &dyn Storage, lesson_id: &str,
         superseded_at: None,
         ingest_provenance: None,
         authored_by: Authorship::User, // load-bearing
+        pack_id: None,
         updated_at: None,
     };
     let yaml = serialize_lesson_frontmatter(&fm);
@@ -522,6 +523,7 @@ async fn llm_authored_lesson_does_not_confer_immunity_through_compression() {
         superseded_at: None,
         ingest_provenance: None,
         authored_by: Authorship::Llm, // NOT User — this is the load-bearing distinction
+        pack_id: None,
         updated_at: None,
     };
     let yaml = serialize_lesson_frontmatter(&fm);

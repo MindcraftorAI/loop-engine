@@ -405,6 +405,7 @@ mod tests {
             superseded_at: None,
             ingest_provenance: None,
             authored_by: Default::default(),
+            pack_id: None,
             updated_at: None,
         };
         let yaml = serialize_lesson_frontmatter(&fm);

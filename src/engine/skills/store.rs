@@ -65,7 +65,7 @@ pub async fn insert(
     // BEST-EFFORT (warn on failure but don't fail the insert) — the
     // skill record is the source of truth; counters can be repaired
     // via `recompute_citation_counts` if they drift.
-    if frontmatter.authored_by.is_user() {
+    if frontmatter.authored_by.is_immune() {
         for evr in &frontmatter.evidence_refs {
             if let Some(mid) = evr.as_memory_id() {
                 if let Err(e) =
@@ -170,7 +170,7 @@ pub async fn archive(
             return Err(EngineError::Parse(format!("skill not found: {id}")));
         };
         let (fm, _body) = parse_skill_file(&bytes)?;
-        if fm.authored_by.is_user() {
+        if fm.authored_by.is_immune() {
             return Err(EngineError::UserSkillImmune {
                 id: id.to_string(),
                 // (Phase F audit-fix close M2: `has_user_lessons` field removed)
@@ -195,7 +195,7 @@ pub async fn delete(
     if !force {
         if let Some(bytes) = storage.get(&key).await? {
             let (fm, _body) = parse_skill_file(&bytes)?;
-            if fm.authored_by.is_user() {
+            if fm.authored_by.is_immune() {
                 return Err(EngineError::UserSkillImmune { id: id.to_string() });
             }
         }

@@ -257,6 +257,11 @@ pub enum Authorship {
     /// Authorship unknown — explicit placeholder. Engine never
     /// produces this; accepted on input for explicit-unknown YAML.
     Unknown,
+    /// Seeded by a codex install (v1.1+). User-installing a codex is
+    /// itself an act of user authorship — Pack-authored lessons share
+    /// User's eviction-immunity invariant and citation-counter
+    /// treatment. The codex id lives in [`LessonFrontmatter::pack_id`].
+    Pack,
 }
 
 impl Authorship {
@@ -267,13 +272,22 @@ impl Authorship {
             Self::AutoMemory => "auto_memory",
             Self::EccInstinct => "ecc_instinct",
             Self::Unknown => "unknown",
+            Self::Pack => "pack",
         }
     }
 
-    /// True when authorship is user-driven — triggers the eviction-
-    /// immunity invariant.
+    /// True when authorship is user-driven specifically — User only.
+    /// Use [`Self::is_immune`] for the eviction-immunity check (which
+    /// also covers Pack-authored lessons from user-installed codexes).
     pub fn is_user(self) -> bool {
         matches!(self, Self::User)
+    }
+
+    /// True when authorship triggers the eviction-immunity invariant.
+    /// User-authored AND Pack-authored (codex-seeded) lessons are both
+    /// immune — installing a codex is itself an act of user authorship.
+    pub fn is_immune(self) -> bool {
+        matches!(self, Self::User | Self::Pack)
     }
 }
 
@@ -343,6 +357,13 @@ pub struct LessonFrontmatter {
     // TS-shaped lessons predating this field.
     #[serde(default)]
     pub authored_by: Authorship,
+
+    // v1.1 addition: when `authored_by` is `Pack`, this carries the
+    // codex id (e.g. "fullstack-react-atomic") that seeded the lesson.
+    // None for non-Pack authorship. Used for symmetric bulk-retirement
+    // (uninstall codex → retire its seeded lessons).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pack_id: Option<String>,
 
     // Always last
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -483,6 +504,22 @@ generated_at: "2026-05-14T00:00:00Z"
         assert!(!Authorship::AutoMemory.is_user());
         assert!(!Authorship::EccInstinct.is_user());
         assert!(!Authorship::Unknown.is_user());
+        // v1.1: Pack is NOT literal user — `is_user` semantics
+        // unchanged. Use `is_immune` for the immunity gate.
+        assert!(!Authorship::Pack.is_user());
+    }
+
+    #[test]
+    fn authorship_is_immune_predicate() {
+        // v1.1 addition: immunity gate covers BOTH User and Pack.
+        // User-installing a codex is itself user authorship.
+        assert!(Authorship::User.is_immune());
+        assert!(Authorship::Pack.is_immune());
+        // All other variants are NOT immune.
+        assert!(!Authorship::Llm.is_immune());
+        assert!(!Authorship::AutoMemory.is_immune());
+        assert!(!Authorship::EccInstinct.is_immune());
+        assert!(!Authorship::Unknown.is_immune());
     }
 
     #[test]
@@ -493,6 +530,7 @@ generated_at: "2026-05-14T00:00:00Z"
             (Authorship::AutoMemory, r#""auto_memory""#),
             (Authorship::EccInstinct, r#""ecc_instinct""#),
             (Authorship::Unknown, r#""unknown""#),
+            (Authorship::Pack, r#""pack""#),
         ];
         for (variant, expected) in cases {
             let s = serde_json::to_string(&variant).unwrap();
@@ -500,6 +538,17 @@ generated_at: "2026-05-14T00:00:00Z"
             let back: Authorship = serde_json::from_str(expected).unwrap();
             assert_eq!(back, variant, "deserialize {expected}");
         }
+    }
+
+    #[test]
+    fn authorship_as_str_covers_all_variants() {
+        // Spot-check Pack variant added in v1.1.
+        assert_eq!(Authorship::User.as_str(), "user");
+        assert_eq!(Authorship::Llm.as_str(), "llm");
+        assert_eq!(Authorship::AutoMemory.as_str(), "auto_memory");
+        assert_eq!(Authorship::EccInstinct.as_str(), "ecc_instinct");
+        assert_eq!(Authorship::Unknown.as_str(), "unknown");
+        assert_eq!(Authorship::Pack.as_str(), "pack");
     }
 
     #[test]
@@ -523,5 +572,24 @@ created_at: "2026-05-14T00:00:00Z"
 "#;
         let fm: LessonFrontmatter = serde_yml::from_str(yaml).unwrap();
         assert_eq!(fm.authored_by, Authorship::Llm);
+        // v1.1: pack_id also defaults to None for pre-v1.1 lessons.
+        assert_eq!(fm.pack_id, None);
+    }
+
+    #[test]
+    fn lesson_frontmatter_pack_id_round_trip() {
+        // v1.1: when authored_by=Pack, pack_id carries the codex id.
+        let yaml = r#"
+id: "les-pack5678"
+description: "seeded by codex"
+status: "promoted"
+created_at: "2026-05-15T00:00:00Z"
+authored_by: "pack"
+pack_id: "fullstack-react-atomic"
+"#;
+        let fm: LessonFrontmatter = serde_yml::from_str(yaml).unwrap();
+        assert_eq!(fm.authored_by, Authorship::Pack);
+        assert_eq!(fm.pack_id.as_deref(), Some("fullstack-react-atomic"));
+        assert!(fm.authored_by.is_immune());
     }
 }

@@ -247,7 +247,10 @@ pub async fn recompute_citation_counts(
                         continue;
                     }
                 };
-            if !fm.authored_by.is_user() {
+            // User-authored OR pack-authored lessons drive immunity.
+            // Pack-authored = codex-seeded; user-installing the codex is
+            // itself an act of user authorship.
+            if !fm.authored_by.is_immune() {
                 continue;
             }
             if let Some(cn) = &fm.causal_narrative {

@@ -4578,10 +4578,12 @@ pub fn loop_engine::engine::yaml::writer::serialize_lesson_frontmatter(fm: &loop
 pub loop_engine::engine::yaml::Authorship::AutoMemory
 pub loop_engine::engine::yaml::Authorship::EccInstinct
 pub loop_engine::engine::yaml::Authorship::Llm
+pub loop_engine::engine::yaml::Authorship::Pack
 pub loop_engine::engine::yaml::Authorship::Unknown
 pub loop_engine::engine::yaml::Authorship::User
 impl loop_engine::engine::Authorship
 pub fn loop_engine::engine::Authorship::as_str(self) -> &'static str
+pub fn loop_engine::engine::Authorship::is_immune(self) -> bool
 pub fn loop_engine::engine::Authorship::is_user(self) -> bool
 impl core::clone::Clone for loop_engine::engine::Authorship
 pub fn loop_engine::engine::Authorship::clone(&self) -> loop_engine::engine::Authorship
@@ -4817,6 +4819,7 @@ pub loop_engine::engine::yaml::LessonFrontmatter::external_signal_sources: alloc
 pub loop_engine::engine::yaml::LessonFrontmatter::id: alloc::string::String
 pub loop_engine::engine::yaml::LessonFrontmatter::ingest_provenance: core::option::Option<loop_engine::yaml::IngestProvenance>
 pub loop_engine::engine::yaml::LessonFrontmatter::last_applied_at: core::option::Option<alloc::string::String>
+pub loop_engine::engine::yaml::LessonFrontmatter::pack_id: core::option::Option<alloc::string::String>
 pub loop_engine::engine::yaml::LessonFrontmatter::promotion_eligible_at: core::option::Option<alloc::string::String>
 pub loop_engine::engine::yaml::LessonFrontmatter::source_feedback_ids: core::option::Option<alloc::vec::Vec<i64>>
 pub loop_engine::engine::yaml::LessonFrontmatter::status: loop_engine::engine::LessonStatus
@@ -4897,10 +4900,12 @@ impl core::panic::unwind_safe::UnwindSafe for loop_engine::engine::skills::Activ
 pub loop_engine::engine::Authorship::AutoMemory
 pub loop_engine::engine::Authorship::EccInstinct
 pub loop_engine::engine::Authorship::Llm
+pub loop_engine::engine::Authorship::Pack
 pub loop_engine::engine::Authorship::Unknown
 pub loop_engine::engine::Authorship::User
 impl loop_engine::engine::Authorship
 pub fn loop_engine::engine::Authorship::as_str(self) -> &'static str
+pub fn loop_engine::engine::Authorship::is_immune(self) -> bool
 pub fn loop_engine::engine::Authorship::is_user(self) -> bool
 impl core::clone::Clone for loop_engine::engine::Authorship
 pub fn loop_engine::engine::Authorship::clone(&self) -> loop_engine::engine::Authorship
@@ -7580,10 +7585,12 @@ pub fn loop_engine::yaml::writer::serialize_lesson_frontmatter(fm: &loop_engine:
 pub loop_engine::yaml::Authorship::AutoMemory
 pub loop_engine::yaml::Authorship::EccInstinct
 pub loop_engine::yaml::Authorship::Llm
+pub loop_engine::yaml::Authorship::Pack
 pub loop_engine::yaml::Authorship::Unknown
 pub loop_engine::yaml::Authorship::User
 impl loop_engine::engine::Authorship
 pub fn loop_engine::engine::Authorship::as_str(self) -> &'static str
+pub fn loop_engine::engine::Authorship::is_immune(self) -> bool
 pub fn loop_engine::engine::Authorship::is_user(self) -> bool
 impl core::clone::Clone for loop_engine::engine::Authorship
 pub fn loop_engine::engine::Authorship::clone(&self) -> loop_engine::engine::Authorship
@@ -7819,6 +7826,7 @@ pub loop_engine::yaml::LessonFrontmatter::external_signal_sources: alloc::vec::V
 pub loop_engine::yaml::LessonFrontmatter::id: alloc::string::String
 pub loop_engine::yaml::LessonFrontmatter::ingest_provenance: core::option::Option<loop_engine::yaml::IngestProvenance>
 pub loop_engine::yaml::LessonFrontmatter::last_applied_at: core::option::Option<alloc::string::String>
+pub loop_engine::yaml::LessonFrontmatter::pack_id: core::option::Option<alloc::string::String>
 pub loop_engine::yaml::LessonFrontmatter::promotion_eligible_at: core::option::Option<alloc::string::String>
 pub loop_engine::yaml::LessonFrontmatter::source_feedback_ids: core::option::Option<alloc::vec::Vec<i64>>
 pub loop_engine::yaml::LessonFrontmatter::status: loop_engine::engine::LessonStatus

@@ -37,7 +37,7 @@ use crate::engine::storage::{Storage, StorageKey};
 use crate::engine::yaml::reader::parse_lesson_frontmatter;
 use crate::engine::yaml::writer::serialize_lesson_frontmatter;
 use crate::engine::yaml::{
-    combine_frontmatter, split_frontmatter_normalized, Authorship, EvidenceRef, LessonFrontmatter,
+    combine_frontmatter, split_frontmatter_normalized, EvidenceRef, LessonFrontmatter,
     LessonStatus,
 };
 
@@ -142,15 +142,15 @@ async fn move_lesson_file(
 }
 
 /// D-G1 + D-G2: decrement memory citation counters for every
-/// `EvidenceRef::Memory(_)` in a user-authored lesson's causal
-/// narrative. Best-effort: warn-log each failure but do NOT fail
-/// the parent transition.
+/// `EvidenceRef::Memory(_)` in an immune lesson's causal narrative
+/// (user-authored OR pack-authored, both confer immunity). Best-effort:
+/// warn-log each failure but do NOT fail the parent transition.
 async fn decrement_user_lesson_citations(
     ctx: &Context,
     storage: &dyn Storage,
     fm: &LessonFrontmatter,
 ) {
-    if fm.authored_by != Authorship::User {
+    if !fm.authored_by.is_immune() {
         return;
     }
     let Some(cn) = &fm.causal_narrative else {
@@ -334,7 +334,7 @@ pub async fn discard(
     let loaded = get_by_id(ctx, storage, id)
         .await?
         .ok_or_else(|| EngineError::LessonNotFound { id: id.to_string() })?;
-    if !force && loaded.frontmatter.authored_by.is_user() {
+    if !force && loaded.frontmatter.authored_by.is_immune() {
         return Err(EngineError::UserLessonImmune { id: id.to_string() });
     }
     let old_key = StorageKey::lesson(ctx, &loaded.status_dir, id);
@@ -435,7 +435,7 @@ pub async fn supersede(
             .ok_or_else(|| EngineError::LessonNotFound {
                 id: old_id.to_string(),
             })?;
-    if !force && loaded.frontmatter.authored_by.is_user() {
+    if !force && loaded.frontmatter.authored_by.is_immune() {
         return Err(EngineError::UserLessonImmune {
             id: old_id.to_string(),
         });
@@ -577,6 +577,7 @@ mod tests {
             superseded_at: None,
             ingest_provenance: None,
             authored_by,
+            pack_id: None,
             causal_narrative: if memory_refs.is_empty() {
                 None
             } else {
@@ -849,6 +850,7 @@ mod tests {
             superseded_at: Some("2026-05-13T00:00:00Z".into()),
             ingest_provenance: None,
             authored_by: Authorship::Llm,
+            pack_id: None,
             causal_narrative: None,
         };
         let yaml = serialize_lesson_frontmatter(&fm);
@@ -981,6 +983,7 @@ mod tests {
                 superseded_at: Some("2026-05-13T00:00:00Z".into()),
                 ingest_provenance: None,
                 authored_by: Authorship::Llm,
+                pack_id: None,
                 causal_narrative: None,
             };
             let yaml = serialize_lesson_frontmatter(&fm);
@@ -1138,6 +1141,7 @@ mod tests {
             superseded_at: None,
             ingest_provenance: None,
             authored_by: Authorship::Llm,
+            pack_id: None,
             causal_narrative: None,
         };
         let yaml = serialize_lesson_frontmatter(&other_fm);
