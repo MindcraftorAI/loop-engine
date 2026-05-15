@@ -36,7 +36,10 @@ use crate::engine::embedding::{Embedder, OpenAiCompatibleEmbedder};
 use crate::engine::error::EngineError;
 use crate::engine::lessons::gate::PromotionConfig;
 use crate::engine::lessons::loader::get_by_id as load_lesson;
-use crate::engine::lessons::transitions::{discard, promote};
+use crate::engine::lessons::transitions::{
+    capture_feedback as transitions_capture_feedback, discard, promote,
+    supersede as transitions_supersede, FeedbackPolarity,
+};
 use crate::engine::memory::{
     delete as memory_delete, get_by_id as memory_get_by_id, hybrid_search as memory_hybrid_search,
     insert_with_provenance as memory_insert_with_provenance, rehydrate_vector_index,
@@ -249,6 +252,12 @@ async fn process_line(
             "user-cited memory is eviction-immune",
             json!({ "memory_id": id, "cited_by": cited_by }),
         ),
+        Err(DispatchError::SupersedeBlocked(reason)) => err_with_data(
+            req.id,
+            -32004,
+            "supersede blocked",
+            json!({ "reason": reason }),
+        ),
         Err(DispatchError::Other(e)) => err(req.id, -32603, format!("internal: {e:#}")),
     }
 }
@@ -262,6 +271,7 @@ enum DispatchError {
     PromotionBlocked(Vec<String>),
     UserLessonImmune(String),
     UserMemoryImmune { id: String, cited_by: u32 },
+    SupersedeBlocked(String),
     Other(anyhow::Error),
 }
 
@@ -285,6 +295,9 @@ async fn dispatch(
         "lesson.recall" => lesson_recall(params, ctx, storage).await,
         "lesson.promote" => lesson_promote(params, ctx, storage).await,
         "lesson.discard" => lesson_discard(params, ctx, storage).await,
+        "lesson.list" => lesson_list(params, ctx, storage).await,
+        "lesson.capture_feedback" => lesson_capture_feedback(params, ctx, storage).await,
+        "lesson.supersede" => lesson_supersede(params, ctx, storage).await,
         "memory.create" => memory_create(params, ctx, storage, embedder, vector_index).await,
         "memory.search" => memory_search_method(params, ctx, storage, embedder, vector_index).await,
         "memory.get" => memory_get(params, ctx, storage).await,
@@ -601,6 +614,193 @@ async fn lesson_discard(
         Err(EngineError::UserLessonImmune { id }) => Err(DispatchError::UserLessonImmune(id)),
         Err(EngineError::LessonNotFound { id }) => Err(DispatchError::NotFound(id)),
         Err(e) => Err(DispatchError::Other(anyhow!("discard failed: {e}"))),
+    }
+}
+
+// ---- v1.3: lesson.list / capture_feedback / supersede --------------
+
+#[derive(Deserialize)]
+struct LessonListParams {
+    /// Restrict to specific status dirs. Default: all four non-discarded.
+    #[serde(default)]
+    statuses: Option<Vec<String>>,
+    /// Page size. Default 50, capped at 500.
+    #[serde(default)]
+    limit: Option<usize>,
+    /// Number of items to skip from the deterministic-sorted list.
+    /// Default 0.
+    #[serde(default)]
+    offset: Option<usize>,
+}
+
+const DEFAULT_LIST_LIMIT: usize = 50;
+const MAX_LIST_LIMIT: usize = 500;
+
+async fn lesson_list(
+    params: Value,
+    ctx: &Context,
+    storage: &dyn Storage,
+) -> std::result::Result<Value, DispatchError> {
+    let p: LessonListParams =
+        serde_json::from_value(params).map_err(|e| DispatchError::InvalidParams(e.to_string()))?;
+    let limit = p.limit.unwrap_or(DEFAULT_LIST_LIMIT).min(MAX_LIST_LIMIT);
+    let offset = p.offset.unwrap_or(0);
+    let statuses: Vec<&str> = match &p.statuses {
+        Some(v) if !v.is_empty() => {
+            for s in v {
+                if !paths::LESSON_STATUS_DIRS.contains(&s.as_str()) {
+                    return Err(DispatchError::InvalidParams(format!(
+                        "unknown status '{s}'; expected one of {:?}",
+                        paths::LESSON_STATUS_DIRS
+                    )));
+                }
+            }
+            v.iter().map(String::as_str).collect()
+        }
+        _ => paths::LESSON_STATUS_DIRS
+            .iter()
+            .filter(|s| **s != "discarded")
+            .copied()
+            .collect(),
+    };
+
+    // Collect all lessons across requested statuses. Sort deterministically
+    // by (status, id) so paginated callers get stable order.
+    let mut rows: Vec<Value> = Vec::new();
+    for status in &statuses {
+        let prefix = StorageKey::lesson_status_prefix(ctx, status);
+        let keys = storage
+            .list(&prefix)
+            .await
+            .map_err(|e| DispatchError::Other(anyhow!("storage list failed: {e}")))?;
+        for k in keys {
+            let bytes = match storage.get(&k).await {
+                Ok(Some(b)) => b,
+                _ => continue,
+            };
+            let content = match std::str::from_utf8(&bytes) {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+            let split = match split_frontmatter_normalized(content) {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+            let fm = match parse_lesson_frontmatter(&split.yaml) {
+                Ok(fm) => fm,
+                Err(_) => continue,
+            };
+            rows.push(json!({
+                "id": fm.id,
+                "description": fm.description,
+                "status": status,
+                "authored_by": authorship_str(fm.authored_by),
+                "pack_id": fm.pack_id,
+                "external_id": fm.external_id,
+                "applied_count": fm.applied_count,
+                "thumbs_up_count": fm.thumbs_up_count,
+                "thumbs_down_count": fm.thumbs_down_count,
+                "created_at": fm.created_at,
+                "updated_at": fm.updated_at,
+            }));
+        }
+    }
+    // Stable order: status-then-id (alphabetical).
+    rows.sort_by(|a, b| {
+        let sa = a.get("status").and_then(Value::as_str).unwrap_or("");
+        let sb = b.get("status").and_then(Value::as_str).unwrap_or("");
+        let by_status = sa.cmp(sb);
+        if by_status != std::cmp::Ordering::Equal {
+            return by_status;
+        }
+        let ia = a.get("id").and_then(Value::as_str).unwrap_or("");
+        let ib = b.get("id").and_then(Value::as_str).unwrap_or("");
+        ia.cmp(ib)
+    });
+
+    let total = rows.len();
+    let page: Vec<Value> = rows.into_iter().skip(offset).take(limit).collect();
+    Ok(json!({
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "returned": page.len(),
+        "results": page,
+    }))
+}
+
+#[derive(Deserialize)]
+struct LessonCaptureFeedbackParams {
+    id: String,
+    polarity: String,
+    #[serde(default)]
+    source_signal_id: Option<String>,
+}
+
+async fn lesson_capture_feedback(
+    params: Value,
+    ctx: &Context,
+    storage: &dyn Storage,
+) -> std::result::Result<Value, DispatchError> {
+    let p: LessonCaptureFeedbackParams =
+        serde_json::from_value(params).map_err(|e| DispatchError::InvalidParams(e.to_string()))?;
+    let polarity = match p.polarity.as_str() {
+        "thumbs_up" | "up" | "+" => FeedbackPolarity::ThumbsUp,
+        "thumbs_down" | "down" | "-" => FeedbackPolarity::ThumbsDown,
+        other => {
+            return Err(DispatchError::InvalidParams(format!(
+                "polarity must be 'thumbs_up' or 'thumbs_down', got '{other}'"
+            )))
+        }
+    };
+    let signal_id = p
+        .source_signal_id
+        .clone()
+        .or_else(|| Some(format!("rpc-{}", new_lesson_id())));
+    match transitions_capture_feedback(ctx, storage, &p.id, polarity, signal_id, Utc::now()).await {
+        Ok(loaded) => Ok(json!({
+            "ok": true,
+            "id": loaded.frontmatter.id,
+            "status": loaded.status_dir,
+            "thumbs_up_count": loaded.frontmatter.thumbs_up_count,
+            "thumbs_down_count": loaded.frontmatter.thumbs_down_count,
+            "external_signal_sources": loaded.frontmatter.external_signal_sources,
+        })),
+        Err(EngineError::LessonNotFound { id }) => Err(DispatchError::NotFound(id)),
+        Err(e) => Err(DispatchError::Other(anyhow!(
+            "capture_feedback failed: {e}"
+        ))),
+    }
+}
+
+#[derive(Deserialize)]
+struct LessonSupersedeParams {
+    old_id: String,
+    new_id: String,
+    #[serde(default)]
+    force: bool,
+}
+
+async fn lesson_supersede(
+    params: Value,
+    ctx: &Context,
+    storage: &dyn Storage,
+) -> std::result::Result<Value, DispatchError> {
+    let p: LessonSupersedeParams =
+        serde_json::from_value(params).map_err(|e| DispatchError::InvalidParams(e.to_string()))?;
+    match transitions_supersede(ctx, storage, &p.old_id, &p.new_id, p.force, Utc::now()).await {
+        Ok(loaded) => Ok(json!({
+            "ok": true,
+            "old_id": p.old_id,
+            "new_id": p.new_id,
+            "old_status": loaded.status_dir,
+        })),
+        Err(EngineError::LessonNotFound { id }) => Err(DispatchError::NotFound(id)),
+        Err(EngineError::UserLessonImmune { id }) => Err(DispatchError::UserLessonImmune(id)),
+        Err(EngineError::LessonSupersedeInvalid { reason, .. }) => {
+            Err(DispatchError::SupersedeBlocked(reason.to_string()))
+        }
+        Err(e) => Err(DispatchError::Other(anyhow!("supersede failed: {e}"))),
     }
 }
 
@@ -1164,6 +1364,7 @@ mod tests {
                 Self::UserMemoryImmune { id, cited_by } => {
                     write!(f, "UserMemoryImmune({id}, cited_by={cited_by})")
                 }
+                Self::SupersedeBlocked(reason) => write!(f, "SupersedeBlocked({reason})"),
                 Self::Other(e) => write!(f, "Other({e:#})"),
             }
         }
