@@ -86,11 +86,21 @@ impl Default for PromotionConfig {
     }
 }
 
-/// Phase G D-G3 (v0.4): max distinct session_ids tracked per lesson
-/// in `applied_session_ids`. Cap prevents runaway frontmatter growth
-/// for lessons applied across many sessions; once we hit the cap,
-/// further unique session_ids are silently dropped (gate signal is
-/// "≥cap distinct" which is plenty of evidence).
+/// Phase G D-G3 (v0.4): advisory cap on distinct session_ids tracked
+/// per lesson in `applied_session_ids`. Bounds frontmatter growth for
+/// lessons applied across many sessions.
+///
+/// **Enforcement is host-responsibility, not engine-side.** The engine
+/// reads `applied_session_ids` (e.g. via `derive_origin_diverse` and
+/// the gate's 5b check) but does NOT mutate it on update — the
+/// recording path lands in Phase 2 hooks (or any host-side recorder).
+/// Hosts SHOULD truncate to this cap before pushing new ids; the gate
+/// signal is "≥cap distinct, which is plenty of evidence" so dropping
+/// further ids past 50 is acceptable.
+///
+/// If the cap is exceeded (host bug or malicious input), the gate still
+/// produces a correct boolean signal — the only failure mode is
+/// frontmatter bloat, not a wedge violation.
 pub const MAX_APPLIED_SESSION_IDS: usize = 50;
 
 /// Derived signal: does this lesson have multi-session reproducibility?
@@ -1010,6 +1020,89 @@ mod tests {
             }
             other => panic!("wedge: expected block on backdated lesson, got {other:?}"),
         }
+    }
+
+    // -----------------------------------------------------------------
+    // Origin diversity (Phase G D-G3, v0.4) — `InsufficientOriginDiversity`
+    // / `OriginDiverse` / `derive_origin_diverse` helper.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn s27_default_config_origin_diversity_check_inert() {
+        // Default `PromotionConfig::min_distinct_origins == 0` →
+        // gate must NOT push `OriginDiverse` (or `InsufficientOriginDiversity`)
+        // even on a lesson with empty `applied_session_ids`. The
+        // 5b block at gate.rs:410 is wrapped in `if > 0`.
+        let fm = passing_fm(); // applied_session_ids = vec![] by default
+        let md = matching_metadata(&fm);
+        let dec = check_promotion_gate(&fm, &md, &PromotionConfig::default(), now());
+        assert!(
+            dec.is_promote(),
+            "default config should still promote, got {dec:?}"
+        );
+        if let GateDecision::Promote { reasons } = dec {
+            assert!(
+                !reasons.contains(&PassReason::OriginDiverse),
+                "OriginDiverse must NOT fire when min_distinct_origins=0, got {reasons:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn s28_origin_diversity_below_required_blocks() {
+        // min_distinct_origins=2, applied_session_ids=[] → observed=0, required=2.
+        let fm = passing_fm();
+        let md = matching_metadata(&fm);
+        let config = PromotionConfig {
+            min_distinct_origins: 2,
+            ..PromotionConfig::default()
+        };
+        let dec = check_promotion_gate(&fm, &md, &config, now());
+        match dec {
+            GateDecision::Block { reasons } => {
+                assert!(reasons.iter().any(|r| matches!(
+                    r,
+                    BlockReason::InsufficientOriginDiversity {
+                        observed: 0,
+                        required: 2
+                    }
+                )));
+            }
+            other => panic!("expected block on missing diversity, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn s29_origin_diversity_at_or_above_required_promotes() {
+        // min_distinct_origins=2, applied_session_ids=["s1","s2"] → observed=2.
+        let mut fm = passing_fm();
+        fm.applied_session_ids = vec!["sess1234".into(), "sessabcd".into()];
+        let md = matching_metadata(&fm);
+        let config = PromotionConfig {
+            min_distinct_origins: 2,
+            ..PromotionConfig::default()
+        };
+        let dec = check_promotion_gate(&fm, &md, &config, now());
+        assert!(
+            dec.is_promote(),
+            "expected promote with diverse origins, got {dec:?}"
+        );
+        if let GateDecision::Promote { reasons } = dec {
+            assert!(reasons.contains(&PassReason::OriginDiverse));
+        }
+    }
+
+    #[test]
+    fn s30_derive_origin_diverse_predicate() {
+        // Pure helper: true iff applied_session_ids.len() >= 2.
+        let mut fm = passing_fm();
+        assert!(!derive_origin_diverse(&fm), "len 0 → false");
+        fm.applied_session_ids = vec!["a".into()];
+        assert!(!derive_origin_diverse(&fm), "len 1 → false");
+        fm.applied_session_ids = vec!["a".into(), "b".into()];
+        assert!(derive_origin_diverse(&fm), "len 2 → true");
+        fm.applied_session_ids = vec!["a".into(), "b".into(), "c".into()];
+        assert!(derive_origin_diverse(&fm), "len 3 → true");
     }
 
     #[tokio::test]
