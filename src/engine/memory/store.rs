@@ -474,6 +474,7 @@ pub async fn rehydrate_vector_index(
 /// top-k vector neighborhood. Callers that need k-guaranteed results
 /// should over-fetch (e.g. pass `k * 2` and truncate). The Phase F
 /// manifest assembly does exactly that.
+#[allow(clippy::too_many_arguments)] // 8 args is fundamental to the operation
 pub async fn search(
     ctx: &Context,
     storage: &dyn Storage,
