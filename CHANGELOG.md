@@ -9,6 +9,37 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ## [Unreleased]
 
+### Added — v0.5 hybrid recall
+
+- **`engine::scoring`** module: shared `score_text_match(query, description, body)` helper
+  with 2x description weighting. Promoted from `serve.rs`'s private `score()` so
+  lesson_recall + the new memory text path share one authoritative scorer.
+
+- **`memory::text_search`** — linear-scan token+substring scoring across all
+  memories. Companion to `memory::search` (semantic). Soft-fails on parse
+  errors like `search`. Respects `MemoryScopeFilter`.
+
+- **`memory::hybrid_search`** — runs `search` + `text_search`, RRF-merges by
+  `MemoryId` (k=60, Cormack 2009). Same-id collisions accumulate scores and
+  flip `source` to `HitSource::Both` (strongest signal). `min_similarity`
+  applied to RAW per-source scores BEFORE RRF — the threshold can't share a
+  scale with RRF scores so it's enforced upstream.
+
+- **`HitSource` enum** + optional `source: Option<HitSource>` field on
+  `MemoryRef`. Pre-v0.5 refs have `source = None`; v0.5+ paths stamp the
+  originating source. JSON-serialized via snake_case, skipped (key omitted)
+  when None.
+
+- **`memory.search` RPC**: new `mode: "semantic" | "text" | "hybrid"` param
+  (default Semantic for back-compat) + `min_similarity: number` param
+  (default 0.0). Wire shape is additive — v0.4 callers see identical output
+  with no extra fields beyond optional `source` on hit objects.
+
+Solves the v0.4 "Gianna" false-negative: a proper-noun query whose semantic
+similarity (0.486) sat below the 0.5 default threshold despite the memory's
+description literally containing the name. The text path catches it now
+(substring score 1.0); RRF surfaces it cleanly.
+
 ### Added
 
 - **`MemoryOrigin`** + optional `origin` block on `MemoryFrontmatter`

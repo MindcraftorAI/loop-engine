@@ -793,16 +793,27 @@ async fn memory_search_method(
     let results: Vec<Value> = hits
         .into_iter()
         .map(|h| {
-            // `source` is JSON-serialized via the existing HitSource
-            // serde (snake_case). Skipped when None (pre-v0.5 refs).
-            json!({
-                "kind": "memory",
-                "id": h.id.as_str(),
-                "description": h.description,
-                "body_preview": h.body_preview,
-                "similarity": (h.similarity * 1000.0).round() / 1000.0,
-                "source": h.source,
-            })
+            // Build manually so an absent `source` (pre-v0.5 refs)
+            // omits the JSON key entirely rather than emitting
+            // `"source": null` — the `serde(skip_serializing_if)`
+            // contract belongs at the wire layer, but `json!` macro
+            // doesn't honor field-level serde attributes.
+            let mut obj = serde_json::Map::new();
+            obj.insert("kind".into(), Value::String("memory".into()));
+            obj.insert("id".into(), Value::String(h.id.as_str().to_string()));
+            obj.insert("description".into(), Value::String(h.description));
+            obj.insert("body_preview".into(), Value::String(h.body_preview));
+            obj.insert(
+                "similarity".into(),
+                serde_json::json!((h.similarity * 1000.0).round() / 1000.0),
+            );
+            if let Some(src) = h.source {
+                obj.insert(
+                    "source".into(),
+                    serde_json::to_value(src).expect("HitSource serde never fails"),
+                );
+            }
+            Value::Object(obj)
         })
         .collect();
     Ok(json!({
