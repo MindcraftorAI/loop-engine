@@ -7009,13 +7009,13 @@ impl core::marker::UnsafeUnpin for loop_engine::host::claude_code::jsonl_watcher
 impl core::panic::unwind_safe::RefUnwindSafe for loop_engine::host::claude_code::jsonl_watcher::source::JsonlWatcherSource
 impl core::panic::unwind_safe::UnwindSafe for loop_engine::host::claude_code::jsonl_watcher::source::JsonlWatcherSource
 pub struct loop_engine::host::claude_code::jsonl_watcher::WatcherHandle
+impl core::panic::unwind_safe::RefUnwindSafe for loop_engine::host::claude_code::jsonl_watcher::WatcherHandle
+impl core::panic::unwind_safe::UnwindSafe for loop_engine::host::claude_code::jsonl_watcher::WatcherHandle
 impl core::marker::Freeze for loop_engine::host::claude_code::jsonl_watcher::WatcherHandle
 impl core::marker::Send for loop_engine::host::claude_code::jsonl_watcher::WatcherHandle
 impl core::marker::Sync for loop_engine::host::claude_code::jsonl_watcher::WatcherHandle
 impl core::marker::Unpin for loop_engine::host::claude_code::jsonl_watcher::WatcherHandle
 impl core::marker::UnsafeUnpin for loop_engine::host::claude_code::jsonl_watcher::WatcherHandle
-impl !core::panic::unwind_safe::RefUnwindSafe for loop_engine::host::claude_code::jsonl_watcher::WatcherHandle
-impl !core::panic::unwind_safe::UnwindSafe for loop_engine::host::claude_code::jsonl_watcher::WatcherHandle
 pub const loop_engine::host::claude_code::jsonl_watcher::PARSE_ERROR_REPORT_EVERY: u32
 pub fn loop_engine::host::claude_code::jsonl_watcher::parse_line(line: &str, session_id: &str) -> loop_engine::host::claude_code::jsonl_watcher::parser::ParseOutcome
 pub async fn loop_engine::host::claude_code::jsonl_watcher::spawn_watcher(dir: std::path::PathBuf, events_tx: tokio::sync::mpsc::unbounded::UnboundedSender<loop_engine::host::claude_code::jsonl_watcher::events::WatcherEvent>) -> anyhow::Result<loop_engine::host::claude_code::jsonl_watcher::WatcherHandle>

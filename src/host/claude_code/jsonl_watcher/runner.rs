@@ -39,6 +39,17 @@ pub struct WatcherHandle {
     _runner_task: tokio::task::JoinHandle<()>,
 }
 
+// `RecommendedWatcher` is a type alias that resolves per-target
+// (`FsEventWatcher` on macOS, `INotifyWatcher` on Linux, etc). The
+// per-target backends produce different auto-derived UnwindSafe
+// impls, which makes the public-api surface diverge by build host.
+// `WatcherHandle` is a Drop-only guard with no panic-observable
+// state — explicit impls keep the public surface stable across
+// build platforms (pre-2026-05-15 the gate baseline was
+// platform-locked to whoever generated it last).
+impl std::panic::UnwindSafe for WatcherHandle {}
+impl std::panic::RefUnwindSafe for WatcherHandle {}
+
 /// Spawn a directory watcher. Emits `WatcherEvent`s on `events_tx`.
 ///
 /// The notify callback is sync, runs on a dedicated thread, and uses
