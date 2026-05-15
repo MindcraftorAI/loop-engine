@@ -518,6 +518,7 @@ pub async fn search(
                     description: mem.frontmatter.description,
                     body_preview,
                     similarity: hit.similarity,
+                    source: Some(crate::engine::memory::HitSource::Semantic),
                 });
             }
             Ok(None) => {
@@ -535,6 +536,202 @@ pub async fn search(
         }
     }
     Ok(out)
+}
+
+/// Text-match search across all memories. Phase G (v0.5): the
+/// complement to [`search`] (semantic vector index lookup). Scans
+/// every memory's frontmatter + body, scores via
+/// [`crate::engine::scoring::score_text_match`], returns top-k by
+/// score. Hits below score 0.0 are dropped (effectively, anything
+/// non-zero qualifies and the threshold is applied by the caller).
+///
+/// Performance: O(n) over the on-disk memory count. Acceptable for
+/// the realistic 2026 corpus (<1k memories). v0.6 may add an
+/// in-memory description cache or an FTS5 index if scale demands.
+///
+/// `scope_filter`, when `Some`, drops hits whose frontmatter scope
+/// doesn't satisfy the filter — same semantics as [`search`].
+///
+/// Soft-fails on parse / load errors (mirrors `search` resilience):
+/// logs + skips. The function never returns Err unless the storage
+/// `list` itself fails.
+pub async fn text_search(
+    ctx: &Context,
+    storage: &dyn Storage,
+    query: &str,
+    k: usize,
+    body_preview_len: usize,
+    scope_filter: Option<&MemoryScopeFilter>,
+) -> Result<Vec<MemoryRef>, EngineError> {
+    let prefix = StorageKey::memories_prefix(ctx);
+    let keys = storage.list(&prefix).await?;
+    let mut scored: Vec<(f32, MemoryRef)> = Vec::new();
+
+    for key in keys {
+        let key_str = key.as_str();
+        if !key_str.ends_with(".md") {
+            continue;
+        }
+        let bytes = match storage.get(&key).await {
+            Ok(Some(b)) => b,
+            Ok(None) => continue,
+            Err(e) => {
+                warn!(key = %key, error = %e, "memory::text_search: get failed; skipping");
+                continue;
+            }
+        };
+        let (fm, body) = match parse_memory_file(&bytes) {
+            Ok(p) => p,
+            Err(e) => {
+                warn!(key = %key, error = %e, "memory::text_search: parse failed; skipping");
+                continue;
+            }
+        };
+        if let Some(f) = scope_filter {
+            if !f.matches(&fm.scope) {
+                continue;
+            }
+        }
+        let sim = crate::engine::scoring::score_text_match(query, &fm.description, &body);
+        if sim <= 0.0 {
+            continue;
+        }
+        let body_preview = body
+            .chars()
+            .take(body_preview_len)
+            .collect::<String>()
+            .trim()
+            .to_string();
+        scored.push((
+            sim,
+            MemoryRef {
+                id: fm.id,
+                description: fm.description,
+                body_preview,
+                similarity: sim,
+                source: Some(crate::engine::memory::HitSource::Text),
+            },
+        ));
+    }
+
+    // Descending sort by score. Stable so equal-score ties keep
+    // storage's listing order (typically lexicographic by id).
+    scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+    scored.truncate(k);
+    Ok(scored.into_iter().map(|(_, r)| r).collect())
+}
+
+/// Hybrid search: run [`search`] (semantic) + [`text_search`] in
+/// parallel, then RRF-merge by `MemoryId`. v0.5's headline recall
+/// path — fixes the v0.4 false-negative on proper-noun queries
+/// (e.g. "Gianna" scored 0.486 semantically, below the 0.5 threshold,
+/// but matches the description literally so the text path surfaces
+/// it at score ~1.0).
+///
+/// RRF formula: `rrf(id) = 1/(60 + sem_rank) + 1/(60 + text_rank)`
+/// where ranks are 1-based and missing-from-list contributes 0. The
+/// `60` constant is the well-known RRF tuning parameter (Cormack et
+/// al. 2009); items appearing in both lists get a strict boost.
+///
+/// Output: top-k merged refs, sorted by RRF score descending. The
+/// `similarity` field on each ref is the RRF score; the `source`
+/// field reflects which path(s) surfaced it (`Both` when both, else
+/// whichever single source).
+///
+/// Over-fetches `k * 2` from each sub-search so the merged top-k is
+/// drawn from a wider pool when sources disagree on ranking.
+#[allow(clippy::too_many_arguments)] // 8 args is fundamental to the operation
+pub async fn hybrid_search(
+    ctx: &Context,
+    storage: &dyn Storage,
+    embedder: &dyn Embedder,
+    vector_index: &dyn VectorIndex,
+    query: &str,
+    k: usize,
+    body_preview_len: usize,
+    scope_filter: Option<&MemoryScopeFilter>,
+) -> Result<Vec<MemoryRef>, EngineError> {
+    /// RRF damping constant. Cormack et al. 2009 — survives well
+    /// across domains; mirrors the opensquid-side `RRF_K = 60`.
+    const RRF_K: f32 = 60.0;
+    let overfetch = k.saturating_mul(2).max(k);
+
+    // Run both paths. Soft-fail on individual sub-search errors so
+    // a hybrid call doesn't lose ALL results when one path stumbles.
+    let semantic_results = match search(
+        ctx,
+        storage,
+        embedder,
+        vector_index,
+        &MemoryQuery::Text(query.to_string()),
+        overfetch,
+        body_preview_len,
+        scope_filter,
+    )
+    .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            warn!(error = %e, "hybrid_search: semantic sub-search failed; continuing with text only");
+            Vec::new()
+        }
+    };
+    let text_results = match text_search(
+        ctx,
+        storage,
+        query,
+        overfetch,
+        body_preview_len,
+        scope_filter,
+    )
+    .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            warn!(error = %e, "hybrid_search: text sub-search failed; continuing with semantic only");
+            Vec::new()
+        }
+    };
+
+    // RRF-merge by id. Same-id collisions get score addition + their
+    // source flipped to `Both`.
+    use std::collections::HashMap;
+    let mut by_id: HashMap<MemoryId, MemoryRef> = HashMap::new();
+    let mut rrf_score: HashMap<MemoryId, f32> = HashMap::new();
+
+    for (idx, r) in semantic_results.into_iter().enumerate() {
+        let rank = (idx + 1) as f32;
+        *rrf_score.entry(r.id.clone()).or_insert(0.0) += 1.0 / (RRF_K + rank);
+        by_id.insert(r.id.clone(), r);
+    }
+    for (idx, r) in text_results.into_iter().enumerate() {
+        let rank = (idx + 1) as f32;
+        *rrf_score.entry(r.id.clone()).or_insert(0.0) += 1.0 / (RRF_K + rank);
+        match by_id.get_mut(&r.id) {
+            Some(existing) => {
+                existing.source = Some(crate::engine::memory::HitSource::Both);
+            }
+            None => {
+                by_id.insert(r.id.clone(), r);
+            }
+        }
+    }
+
+    // Stamp the RRF score onto each ref's `similarity` and sort.
+    let mut merged: Vec<MemoryRef> = by_id
+        .into_iter()
+        .map(|(id, mut r)| {
+            r.similarity = *rrf_score.get(&id).unwrap_or(&0.0);
+            r
+        })
+        .collect();
+    merged.sort_by(|a, b| {
+        b.similarity
+            .partial_cmp(&a.similarity)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    merged.truncate(k);
+    Ok(merged)
 }
 
 /// Delete a memory. Removes the .md file, the .vec sidecar, AND
@@ -1673,5 +1870,161 @@ mod tests {
         let bytes = vec![0u8; 16]; // 4 floats
         let r = bytes_to_embedding(&bytes, 8); // expected 8
         assert!(matches!(r, Err(EngineError::Parse(_))));
+    }
+
+    // -----------------------------------------------------------------
+    // v0.5 hybrid recall — text_search + hybrid_search.
+    // -----------------------------------------------------------------
+
+    #[tokio::test]
+    async fn text_search_empty_store_returns_empty() {
+        let (storage, _, _, _) = fresh_setup().await;
+        let hits = text_search(&ctx(), storage.as_ref(), "anything", 5, 240, None)
+            .await
+            .unwrap();
+        assert!(hits.is_empty());
+    }
+
+    #[tokio::test]
+    async fn text_search_finds_substring_in_description() {
+        // Seeds the exact "Gianna" false-negative scenario from v0.4
+        // dogfooding: a memory whose description literally contains
+        // "Gianna" should surface via text_search at high score even
+        // though the semantic path scored it 0.486 (below 0.5).
+        let (storage, embedder, vector_index, now) = fresh_setup().await;
+        let embedder = embedder.with_response(vec![unit_vec(4, 0)]);
+        let id = MemoryId::new("mem-family01");
+        insert(
+            &ctx(),
+            storage.as_ref(),
+            &embedder,
+            &vector_index,
+            id.clone(),
+            "Sangmin's family — daughter Gianna (4) and son Teddy",
+            "Gianna loves art and gymnastics. Teddy is a rascal.",
+            now,
+        )
+        .await
+        .unwrap();
+        let hits = text_search(&ctx(), storage.as_ref(), "Gianna", 5, 240, None)
+            .await
+            .unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].id, id);
+        assert!(
+            hits[0].similarity > 0.5,
+            "description+body match should score > 0.5, got {}",
+            hits[0].similarity
+        );
+        assert_eq!(hits[0].source, Some(crate::engine::memory::HitSource::Text));
+    }
+
+    #[tokio::test]
+    async fn text_search_respects_scope_filter() {
+        let (storage, embedder, vector_index, now) = fresh_setup().await;
+        let embedder = embedder.with_response(vec![unit_vec(4, 0), unit_vec(4, 1)]);
+        let alpha_id = MemoryId::new("mem-alpha");
+        let beta_id = MemoryId::new("mem-beta");
+        insert_scoped(
+            &ctx(),
+            storage.as_ref(),
+            &embedder,
+            &vector_index,
+            alpha_id.clone(),
+            "alpha deploy",
+            "deploy via Heroku",
+            now,
+            crate::engine::memory::MemoryScope::Project("alpha".into()),
+        )
+        .await
+        .unwrap();
+        insert_scoped(
+            &ctx(),
+            storage.as_ref(),
+            &embedder,
+            &vector_index,
+            beta_id.clone(),
+            "beta deploy",
+            "deploy via kubectl",
+            now,
+            crate::engine::memory::MemoryScope::Project("beta".into()),
+        )
+        .await
+        .unwrap();
+
+        // No filter → both match.
+        let unfiltered = text_search(&ctx(), storage.as_ref(), "deploy", 5, 240, None)
+            .await
+            .unwrap();
+        assert_eq!(unfiltered.len(), 2);
+
+        // Project=alpha filter → only alpha.
+        let alpha_filter = crate::engine::memory::MemoryScopeFilter::Exact(
+            crate::engine::memory::MemoryScope::Project("alpha".into()),
+        );
+        let filtered = text_search(
+            &ctx(),
+            storage.as_ref(),
+            "deploy",
+            5,
+            240,
+            Some(&alpha_filter),
+        )
+        .await
+        .unwrap();
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].id, alpha_id);
+    }
+
+    #[tokio::test]
+    async fn hybrid_search_marks_dual_source_match_as_both() {
+        // A memory that surfaces from BOTH the semantic and text
+        // paths should get `source = Both` and an RRF score strictly
+        // higher than either single-source contribution.
+        let (storage, embedder, vector_index, now) = fresh_setup().await;
+        // The embedder is queried twice: once at insert, once during
+        // hybrid_search's semantic sub-call. Same vector both times.
+        let embedder = embedder.with_response(vec![unit_vec(4, 0), unit_vec(4, 0)]);
+        let id = MemoryId::new("mem-dual001");
+        insert(
+            &ctx(),
+            storage.as_ref(),
+            &embedder,
+            &vector_index,
+            id.clone(),
+            "Heroku deploy notes",
+            "deploy via heroku git:remote and push",
+            now,
+        )
+        .await
+        .unwrap();
+
+        let hits = hybrid_search(
+            &ctx(),
+            storage.as_ref(),
+            &embedder,
+            &vector_index,
+            "heroku",
+            5,
+            240,
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].id, id);
+        // Both paths should have surfaced it: semantic via
+        // similarity to the query embedding, text via substring on
+        // "heroku" appearing in both description and body.
+        assert_eq!(hits[0].source, Some(crate::engine::memory::HitSource::Both));
+        // RRF score is 2 × 1/(60+1) ≈ 0.0328 when item is rank 1
+        // in both lists. Lower bound is 1/61 ≈ 0.0164 (single-list);
+        // assert we strictly exceed it.
+        assert!(
+            hits[0].similarity > 1.0 / 61.0,
+            "dual-source RRF should beat single-source, got {}",
+            hits[0].similarity
+        );
     }
 }

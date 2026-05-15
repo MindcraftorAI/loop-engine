@@ -42,8 +42,9 @@ pub use lifecycle::{get_by_id_chasing_derived_from, recompute_citation_counts, R
 // within the engine; not part of the external API.
 pub(crate) use store::decrement_citation_count;
 pub use store::{
-    delete, get_by_id, get_by_id_with_embedding, increment_citation_count, insert, insert_scoped,
-    insert_with_provenance, prune, rehydrate_vector_index, search, update, RehydrateStats,
+    delete, get_by_id, get_by_id_with_embedding, hybrid_search, increment_citation_count, insert,
+    insert_scoped, insert_with_provenance, prune, rehydrate_vector_index, search, text_search,
+    update, RehydrateStats,
 };
 
 /// YAML frontmatter for a memory file on disk. Mirrors
@@ -172,6 +173,24 @@ impl Memory {
     }
 }
 
+/// Which search path produced a [`MemoryRef`]. v0.5 hybrid-recall
+/// addition: when the hybrid path runs, a memory can surface from
+/// the semantic neighborhood, the text-match scan, or both. Callers
+/// (CLI / opensquid recall preview) can render this for transparency.
+/// `None` on refs from pre-v0.5 code paths.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HitSource {
+    /// Vector-index nearest-neighbor lookup (`memory::search`).
+    Semantic,
+    /// Text-match scan (`memory::text_search`, scores via
+    /// [`crate::engine::scoring::score_text_match`]).
+    Text,
+    /// Surfaced from BOTH paths — strongest signal; the v0.5 hybrid
+    /// RRF gives these refs a dual-source score boost.
+    Both,
+}
+
 /// Trimmed view of a memory for the manifest's `memories` section.
 /// Mirrors [`crate::engine::manifest::ActiveLesson`] trim pattern —
 /// caller gets enough to render + an ID to fetch the full Memory on
@@ -182,8 +201,20 @@ pub struct MemoryRef {
     pub id: MemoryId,
     pub description: String,
     pub body_preview: String,
-    /// Cosine similarity to the manifest query, range [0.0, 1.0].
+    /// Similarity score, range `[0.0, 1.0]`. Interpretation depends
+    /// on `source`:
+    /// - `Semantic` → cosine similarity from the embedder.
+    /// - `Text` → token-overlap + substring score from
+    ///   [`crate::engine::scoring::score_text_match`].
+    /// - `Both` → RRF-fused score (sum of `1/(60+rank)` from each
+    ///   source); not directly comparable to single-source scores
+    ///   but always strictly higher than either alone.
     pub similarity: f32,
+    /// Which search path produced this ref (v0.5 hybrid addition).
+    /// `None` for pre-v0.5 callers that don't set it. JSON-serialized
+    /// by serve.rs handlers (memory.search response) using snake_case
+    /// variant names; skipped when None.
+    pub source: Option<HitSource>,
 }
 
 /// Query driver for the manifest's memory section. Set on

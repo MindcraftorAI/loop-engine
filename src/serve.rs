@@ -38,10 +38,10 @@ use crate::engine::lessons::gate::PromotionConfig;
 use crate::engine::lessons::loader::get_by_id as load_lesson;
 use crate::engine::lessons::transitions::{discard, promote};
 use crate::engine::memory::{
-    delete as memory_delete, get_by_id as memory_get_by_id,
+    delete as memory_delete, get_by_id as memory_get_by_id, hybrid_search as memory_hybrid_search,
     insert_with_provenance as memory_insert_with_provenance, rehydrate_vector_index,
-    search as memory_search, update as memory_update, MemoryId, MemoryOrigin, MemoryQuery,
-    MemoryScope, MemoryScopeFilter,
+    search as memory_search, text_search as memory_text_search, update as memory_update, MemoryId,
+    MemoryOrigin, MemoryQuery, MemoryScope, MemoryScopeFilter,
 };
 use crate::engine::paths;
 use crate::engine::scoring::score_text_match;
@@ -645,6 +645,27 @@ struct MemorySearchParams {
     /// (returns all scopes visible to the caller).
     #[serde(default)]
     scope_filter: Option<ScopeFilterWire>,
+    /// v0.5: which search path to run. Defaults to `Semantic` for
+    /// back-compat with v0.3.1+ callers. `Text` runs the new
+    /// text-match scan; `Hybrid` runs both and RRF-merges. The
+    /// hybrid path is what opensquid's `recall` defaults to in v0.5
+    /// — it fixes the "Gianna" false-negative (semantic 0.486 < 0.5
+    /// threshold) by surfacing the description's substring match.
+    #[serde(default)]
+    mode: Option<SearchMode>,
+}
+
+/// v0.5 search-path selector. Wire serde: `"semantic"` (default),
+/// `"text"`, `"hybrid"`. Maps to [`crate::engine::memory::search`],
+/// [`crate::engine::memory::text_search`], and
+/// [`crate::engine::memory::hybrid_search`] respectively.
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+enum SearchMode {
+    #[default]
+    Semantic,
+    Text,
+    Hybrid,
 }
 
 /// JSON-wire shape for `MemoryScopeFilter`. The engine's enum doesn't
@@ -705,27 +726,62 @@ async fn memory_search_method(
     }
     let preview_len = if p.include_body { usize::MAX } else { 240 };
     let scope_filter = p.scope_filter.map(|w| w.into_engine()).transpose()?;
-    let hits = memory_search(
-        ctx,
-        storage,
-        embedder,
-        vector_index,
-        &MemoryQuery::Text(p.query.clone()),
-        p.limit,
-        preview_len,
-        scope_filter.as_ref(),
-    )
-    .await
-    .map_err(|e| DispatchError::Other(anyhow!("memory.search failed: {e}")))?;
+    let mode = p.mode.unwrap_or_default();
+
+    // v0.5: dispatch by mode. Default `Semantic` matches v0.3.1+
+    // behavior; `Text` is the new linear-scan token+substring path;
+    // `Hybrid` runs both and RRF-merges (the path opensquid's recall
+    // defaults to). All three return `Vec<MemoryRef>` so the JSON
+    // formatting below stays uniform.
+    let hits = match mode {
+        SearchMode::Semantic => memory_search(
+            ctx,
+            storage,
+            embedder,
+            vector_index,
+            &MemoryQuery::Text(p.query.clone()),
+            p.limit,
+            preview_len,
+            scope_filter.as_ref(),
+        )
+        .await
+        .map_err(|e| DispatchError::Other(anyhow!("memory.search (semantic) failed: {e}")))?,
+        SearchMode::Text => memory_text_search(
+            ctx,
+            storage,
+            &p.query,
+            p.limit,
+            preview_len,
+            scope_filter.as_ref(),
+        )
+        .await
+        .map_err(|e| DispatchError::Other(anyhow!("memory.search (text) failed: {e}")))?,
+        SearchMode::Hybrid => memory_hybrid_search(
+            ctx,
+            storage,
+            embedder,
+            vector_index,
+            &p.query,
+            p.limit,
+            preview_len,
+            scope_filter.as_ref(),
+        )
+        .await
+        .map_err(|e| DispatchError::Other(anyhow!("memory.search (hybrid) failed: {e}")))?,
+    };
+
     let results: Vec<Value> = hits
         .into_iter()
         .map(|h| {
+            // `source` is JSON-serialized via the existing HitSource
+            // serde (snake_case). Skipped when None (pre-v0.5 refs).
             json!({
                 "kind": "memory",
                 "id": h.id.as_str(),
                 "description": h.description,
                 "body_preview": h.body_preview,
                 "similarity": (h.similarity * 1000.0).round() / 1000.0,
+                "source": h.source,
             })
         })
         .collect();
