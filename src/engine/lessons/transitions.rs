@@ -37,8 +37,7 @@ use crate::engine::storage::{Storage, StorageKey};
 use crate::engine::yaml::reader::parse_lesson_frontmatter;
 use crate::engine::yaml::writer::serialize_lesson_frontmatter;
 use crate::engine::yaml::{
-    combine_frontmatter, split_frontmatter_normalized, EvidenceRef, LessonFrontmatter,
-    LessonStatus,
+    combine_frontmatter, split_frontmatter_normalized, EvidenceRef, LessonFrontmatter, LessonStatus,
 };
 
 /// CAS-RMW retry budget for transitions. Matches Phase A/F precedent.
@@ -578,6 +577,7 @@ mod tests {
             ingest_provenance: None,
             authored_by,
             pack_id: None,
+            external_id: None,
             causal_narrative: if memory_refs.is_empty() {
                 None
             } else {
@@ -851,6 +851,7 @@ mod tests {
             ingest_provenance: None,
             authored_by: Authorship::Llm,
             pack_id: None,
+            external_id: None,
             causal_narrative: None,
         };
         let yaml = serialize_lesson_frontmatter(&fm);
@@ -984,6 +985,7 @@ mod tests {
                 ingest_provenance: None,
                 authored_by: Authorship::Llm,
                 pack_id: None,
+                external_id: None,
                 causal_narrative: None,
             };
             let yaml = serialize_lesson_frontmatter(&fm);
@@ -1142,6 +1144,7 @@ mod tests {
             ingest_provenance: None,
             authored_by: Authorship::Llm,
             pack_id: None,
+            external_id: None,
             causal_narrative: None,
         };
         let yaml = serialize_lesson_frontmatter(&other_fm);

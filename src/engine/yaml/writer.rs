@@ -73,6 +73,18 @@ pub fn serialize_lesson_frontmatter(fm: &LessonFrontmatter) -> String {
     // converge to the new shape on first write).
     emit_plain(&mut out, "authored_by", fm.authored_by.as_str());
 
+    // v1.1: pack provenance — only present for Pack-authored lessons.
+    // Bug fix: prior to v1.2 these were declared on the schema but
+    // never emitted by the writer, so on-disk pack lessons round-
+    // tripped to None even when the wire payload supplied them. Fixed
+    // alongside v1.2 external_id introduction.
+    if let Some(v) = &fm.pack_id {
+        emit_string(&mut out, "pack_id", v);
+    }
+    if let Some(v) = &fm.external_id {
+        emit_string(&mut out, "external_id", v);
+    }
+
     // Always last
     if let Some(v) = &fm.updated_at {
         emit_plain(&mut out, "updated_at", v);
@@ -225,6 +237,7 @@ mod tests {
             ingest_provenance: None,
             authored_by: Default::default(),
             pack_id: None,
+            external_id: None,
             updated_at: None,
         }
     }

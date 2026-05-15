@@ -498,6 +498,7 @@ mod tests {
             ingest_provenance: None,
             authored_by: Default::default(),
             pack_id: None,
+            external_id: None,
             updated_at: None,
         }
     }

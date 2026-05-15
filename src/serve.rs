@@ -308,6 +308,17 @@ struct LessonCreateParams {
     /// Required when `authored_by == "pack"` (validated below).
     #[serde(default)]
     pack_id: Option<String>,
+    /// v1.2: opaque per-pack lesson identifier. When present alongside
+    /// `pack_id` on a Pack-authored create, the engine performs an
+    /// UPSERT — looks up the existing lesson by `(pack_id, external_id)`
+    /// and reuses its engine `id` if found. None falls through to the
+    /// legacy mint-fresh path for backwards compat with pre-v1.2 callers.
+    /// Only meaningful when `authored_by == "pack"`; ignored otherwise.
+    /// Preserves engine-id stability across pack re-installs so
+    /// downstream consumers (system-prompt indexes, search caches)
+    /// don't see new rows on every refresh.
+    #[serde(default)]
+    external_id: Option<String>,
     /// v1.1: seed directly as promoted, bypassing the wedge gate.
     /// Only allowed when `authored_by == "pack"` — the trust comes
     /// from user-installing the codex (Pack provenance = user-equivalent
@@ -346,13 +357,53 @@ async fn lesson_create(
     } else {
         None
     };
-    let id = new_lesson_id();
-    let created_at = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
-
-    let (status, status_dir) = if p.seed_as_promoted {
-        (LessonStatus::Promoted, "promoted")
+    let external_id = if matches!(authored_by, Authorship::Pack) {
+        p.external_id.clone()
     } else {
-        (LessonStatus::Pending, "pending")
+        None
+    };
+
+    // v1.2 upsert path: when a Pack-authored create supplies both
+    // `pack_id` and `external_id`, look up an existing lesson under
+    // that key and reuse its engine `id` + status. Preserves engine-id
+    // stability across pack re-installs so downstream consumers
+    // (system-prompt indexes, search caches) don't see new rows on
+    // every refresh. Discarded lessons are skipped — user-initiated
+    // discards must stick (see `find_pack_lesson` doc).
+    let existing = match (pack_id.as_deref(), external_id.as_deref()) {
+        (Some(p_id), Some(ext_id)) => {
+            crate::engine::lessons::loader::find_pack_lesson(ctx, storage, p_id, ext_id)
+                .await
+                .map_err(|e| DispatchError::Other(anyhow!("upsert lookup failed: {e}")))?
+        }
+        _ => None,
+    };
+
+    let now_iso = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+    let was_upsert = existing.is_some();
+    let (id, created_at, status, status_dir, updated_at) = match existing {
+        Some(loaded) => {
+            // Reuse existing engine id + preserve current status so we
+            // don't yank a promoted lesson back to pending or undo a
+            // user-initiated activate. created_at stays original;
+            // updated_at marks the upsert.
+            (
+                loaded.frontmatter.id.clone(),
+                loaded.frontmatter.created_at.clone(),
+                loaded.frontmatter.status,
+                loaded.status_dir.clone(),
+                Some(now_iso.clone()),
+            )
+        }
+        None => {
+            // Fresh mint — original v1.1 behavior.
+            let (st, st_dir) = if p.seed_as_promoted {
+                (LessonStatus::Promoted, "promoted".to_string())
+            } else {
+                (LessonStatus::Pending, "pending".to_string())
+            };
+            (new_lesson_id(), now_iso.clone(), st, st_dir, None)
+        }
     };
 
     let fm = LessonFrontmatter {
@@ -375,12 +426,13 @@ async fn lesson_create(
         ingest_provenance: None,
         authored_by,
         pack_id: pack_id.clone(),
-        updated_at: None,
+        external_id: external_id.clone(),
+        updated_at,
     };
 
     let yaml = serialize_lesson_frontmatter(&fm);
     let content = combine_frontmatter(&yaml, &p.body);
-    let key = StorageKey::lesson(ctx, status_dir, &id);
+    let key = StorageKey::lesson(ctx, &status_dir, &id);
     storage
         .put(&key, Bytes::from(content))
         .await
@@ -388,7 +440,7 @@ async fn lesson_create(
 
     let mut response = serde_json::Map::new();
     response.insert("id".into(), Value::String(id));
-    response.insert("status".into(), Value::String(status_dir.into()));
+    response.insert("status".into(), Value::String(status_dir.clone()));
     response.insert(
         "authored_by".into(),
         Value::String(authorship_str(authored_by).into()),
@@ -396,7 +448,11 @@ async fn lesson_create(
     if let Some(pid) = pack_id {
         response.insert("pack_id".into(), Value::String(pid));
     }
+    if let Some(ext_id) = external_id {
+        response.insert("external_id".into(), Value::String(ext_id));
+    }
     response.insert("created_at".into(), Value::String(created_at));
+    response.insert("updated".into(), Value::Bool(was_upsert));
     Ok(Value::Object(response))
 }
 

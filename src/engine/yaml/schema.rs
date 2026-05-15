@@ -365,6 +365,17 @@ pub struct LessonFrontmatter {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pack_id: Option<String>,
 
+    // v1.2 addition: an opaque identifier supplied by the upstream
+    // pack source for a specific lesson within the pack. Combined with
+    // `pack_id`, forms the upsert key for re-install dedup —
+    // `lesson.create` with the same `(pack_id, external_id)` updates
+    // the existing lesson row in place instead of minting a new id.
+    // This keeps engine-id stability across re-installs so downstream
+    // consumers (system-prompt indexes, search caches) don't see new
+    // rows every refresh. None when the caller doesn't supply one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_id: Option<String>,
+
     // Always last
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub updated_at: Option<String>,

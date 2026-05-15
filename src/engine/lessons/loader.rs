@@ -128,6 +128,66 @@ pub async fn get_by_id(
     Ok(None)
 }
 
+/// Find a Pack-authored lesson by its `(pack_id, external_id)` upsert
+/// key. Walks all status dirs except `discarded` (user-initiated
+/// discards must stick — re-installing the source pack should NOT
+/// silently resurrect a lesson the user explicitly threw away).
+///
+/// Returns `Ok(None)` if no lesson matches. Used by `lesson.create`'s
+/// upsert path so re-installing the same pack updates existing rows
+/// in place (preserving the engine `id`) instead of minting a new one.
+///
+/// # Errors
+///
+/// `EngineError::Storage(_)` for backend I/O failures, propagated as
+/// the underlying scan/get fails. Per-key parse errors are logged
+/// (in callers) but the SCAN itself is fail-fast on storage error.
+pub async fn find_pack_lesson(
+    ctx: &Context,
+    storage: &dyn Storage,
+    pack_id: &str,
+    external_id: &str,
+) -> Result<Option<LoadedLesson>, EngineError> {
+    if pack_id.is_empty() || external_id.is_empty() {
+        return Ok(None);
+    }
+    // Scan only non-discarded statuses. `pending`/`active`/`promoted`/
+    // `superseded` are all valid hits for an upsert; a superseded row
+    // is a logical predecessor and updating it preserves the chain.
+    for status in paths::LESSON_STATUS_DIRS
+        .iter()
+        .filter(|s| **s != "discarded")
+    {
+        let prefix = StorageKey::lesson_status_prefix(ctx, status);
+        let keys = storage.list(&prefix).await?;
+        for key in keys {
+            let Some(bytes) = storage.get(&key).await? else {
+                continue;
+            };
+            let Ok(content) = std::str::from_utf8(&bytes) else {
+                continue;
+            };
+            let Ok(split) = split_frontmatter_normalized(content) else {
+                continue;
+            };
+            let Ok(frontmatter) = parse_lesson_frontmatter(&split.yaml) else {
+                continue;
+            };
+            if frontmatter.pack_id.as_deref() == Some(pack_id)
+                && frontmatter.external_id.as_deref() == Some(external_id)
+            {
+                return Ok(Some(LoadedLesson {
+                    path: PathBuf::from(key.as_str()),
+                    status_dir: (*status).to_string(),
+                    frontmatter,
+                    body: split.body,
+                }));
+            }
+        }
+    }
+    Ok(None)
+}
+
 /// Load a specific lesson file by absolute path. Used by callers that
 /// already know the file location (the signal writer takes the lock
 /// before reading, so it knows the path).
@@ -208,6 +268,7 @@ mod tests {
             ingest_provenance: None,
             authored_by: Default::default(),
             pack_id: None,
+            external_id: None,
             updated_at: None,
         };
         let yaml = serialize_lesson_frontmatter(&fm);
@@ -389,6 +450,162 @@ mod tests {
             .unwrap();
         let result = get_by_id(&h.ctx, h.storage.as_ref(), "les-broken1").await;
         assert!(matches!(result, Err(EngineError::Parse(_))));
+    }
+
+    // =================================================================
+    // v1.2 — find_pack_lesson tests (upsert-key lookup for re-install dedup)
+    // =================================================================
+
+    fn pack_lesson_yaml(id: &str, status: &str, pack_id: &str, external_id: &str) -> String {
+        format!(
+            "---\n\
+             id: {id}\n\
+             description: \"pack-seeded\"\n\
+             status: {status}\n\
+             created_at: \"2026-05-13T00:00:00.000Z\"\n\
+             applied_count: 0\n\
+             thumbs_up_count: 0\n\
+             thumbs_down_count: 0\n\
+             external_signal_sources: []\n\
+             authored_by: pack\n\
+             pack_id: \"{pack_id}\"\n\
+             external_id: \"{external_id}\"\n\
+             ---\n\
+             pack body\n"
+        )
+    }
+
+    #[tokio::test]
+    async fn find_pack_lesson_returns_none_when_no_match() {
+        let h = TestHarness::in_memory();
+        let result = find_pack_lesson(&h.ctx, h.storage.as_ref(), "missing-pack", "missing-ext")
+            .await
+            .unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn find_pack_lesson_returns_none_for_empty_keys() {
+        let h = TestHarness::in_memory();
+        // Even if a lesson with empty pack_id/external_id existed (it
+        // shouldn't), we refuse the lookup as a defensive guard.
+        let r1 = find_pack_lesson(&h.ctx, h.storage.as_ref(), "", "ext")
+            .await
+            .unwrap();
+        let r2 = find_pack_lesson(&h.ctx, h.storage.as_ref(), "pack", "")
+            .await
+            .unwrap();
+        assert!(r1.is_none());
+        assert!(r2.is_none());
+    }
+
+    #[tokio::test]
+    async fn find_pack_lesson_finds_match_in_promoted() {
+        let h = TestHarness::in_memory();
+        let key = StorageKey::lesson(&h.ctx, "promoted", "les-pack0001");
+        h.storage
+            .put(
+                &key,
+                Bytes::from(pack_lesson_yaml(
+                    "les-pack0001",
+                    "promoted",
+                    "my-pack",
+                    "rule-a",
+                )),
+            )
+            .await
+            .unwrap();
+        let loaded = find_pack_lesson(&h.ctx, h.storage.as_ref(), "my-pack", "rule-a")
+            .await
+            .unwrap()
+            .expect("should find");
+        assert_eq!(loaded.frontmatter.id, "les-pack0001");
+        assert_eq!(loaded.status_dir, "promoted");
+        assert_eq!(loaded.frontmatter.pack_id.as_deref(), Some("my-pack"));
+        assert_eq!(loaded.frontmatter.external_id.as_deref(), Some("rule-a"));
+    }
+
+    #[tokio::test]
+    async fn find_pack_lesson_skips_discarded() {
+        // A user-initiated discard MUST stick — re-installing a pack
+        // should not silently resurrect the lesson.
+        let h = TestHarness::in_memory();
+        let key = StorageKey::lesson(&h.ctx, "discarded", "les-pack0002");
+        h.storage
+            .put(
+                &key,
+                Bytes::from(pack_lesson_yaml(
+                    "les-pack0002",
+                    "discarded",
+                    "my-pack",
+                    "rule-b",
+                )),
+            )
+            .await
+            .unwrap();
+        let result = find_pack_lesson(&h.ctx, h.storage.as_ref(), "my-pack", "rule-b")
+            .await
+            .unwrap();
+        assert!(result.is_none(), "discarded matches must be excluded");
+    }
+
+    #[tokio::test]
+    async fn find_pack_lesson_distinguishes_pack_id_and_external_id() {
+        let h = TestHarness::in_memory();
+        // Two lessons under the same pack_id but different external_ids.
+        for (engine_id, ext_id) in [("les-pack0003", "rule-a"), ("les-pack0004", "rule-b")] {
+            let key = StorageKey::lesson(&h.ctx, "promoted", engine_id);
+            h.storage
+                .put(
+                    &key,
+                    Bytes::from(pack_lesson_yaml(engine_id, "promoted", "my-pack", ext_id)),
+                )
+                .await
+                .unwrap();
+        }
+        let a = find_pack_lesson(&h.ctx, h.storage.as_ref(), "my-pack", "rule-a")
+            .await
+            .unwrap()
+            .expect("a should exist");
+        let b = find_pack_lesson(&h.ctx, h.storage.as_ref(), "my-pack", "rule-b")
+            .await
+            .unwrap()
+            .expect("b should exist");
+        assert_eq!(a.frontmatter.id, "les-pack0003");
+        assert_eq!(b.frontmatter.id, "les-pack0004");
+    }
+
+    #[tokio::test]
+    async fn find_pack_lesson_finds_match_across_non_discarded_statuses() {
+        // Same lesson moved to active by a transition; upsert lookup
+        // should still find it (status preservation is the caller's
+        // responsibility, but the lookup itself should hit any
+        // non-discarded dir).
+        for status in paths::LESSON_STATUS_DIRS
+            .iter()
+            .filter(|s| **s != "discarded")
+        {
+            let h = TestHarness::in_memory();
+            let key = StorageKey::lesson(&h.ctx, status, "les-pack9999");
+            h.storage
+                .put(
+                    &key,
+                    Bytes::from(pack_lesson_yaml(
+                        "les-pack9999",
+                        status,
+                        "my-pack",
+                        "rule-mover",
+                    )),
+                )
+                .await
+                .unwrap();
+            let loaded = find_pack_lesson(&h.ctx, h.storage.as_ref(), "my-pack", "rule-mover")
+                .await
+                .unwrap()
+                .expect("should find");
+            assert_eq!(&loaded.status_dir, status);
+            assert_eq!(loaded.frontmatter.id, "les-pack9999");
+        }
     }
 
     /// Harness-driven tests run in parallel — proves ENV_LOCK isn't needed

@@ -47,6 +47,7 @@ fn matches_ts_load_path_byte_output() {
         }),
         authored_by: Default::default(),
         pack_id: None,
+        external_id: None,
         updated_at: Some("2026-05-13T01:30:00.000Z".into()),
     };
 
