@@ -653,6 +653,15 @@ struct MemorySearchParams {
     /// threshold) by surfacing the description's substring match.
     #[serde(default)]
     mode: Option<SearchMode>,
+    /// v0.5: per-sub-search similarity floor. Applied to RAW scores
+    /// (cosine for semantic, token+substring for text) BEFORE the
+    /// hybrid RRF merge — RRF scores are in a different range and
+    /// can't share the threshold meaningfully. Default `0.0` (no
+    /// filtering). opensquid's recall passes its `min_similarity`
+    /// here so the v0.4 "decision-makable signal" UX survives the
+    /// hybrid transition.
+    #[serde(default)]
+    min_similarity: Option<f32>,
 }
 
 /// v0.5 search-path selector. Wire serde: `"semantic"` (default),
@@ -727,35 +736,45 @@ async fn memory_search_method(
     let preview_len = if p.include_body { usize::MAX } else { 240 };
     let scope_filter = p.scope_filter.map(|w| w.into_engine()).transpose()?;
     let mode = p.mode.unwrap_or_default();
+    let min_similarity = p.min_similarity.unwrap_or(0.0).clamp(0.0, 1.0);
 
     // v0.5: dispatch by mode. Default `Semantic` matches v0.3.1+
     // behavior; `Text` is the new linear-scan token+substring path;
     // `Hybrid` runs both and RRF-merges (the path opensquid's recall
-    // defaults to). All three return `Vec<MemoryRef>` so the JSON
-    // formatting below stays uniform.
+    // defaults to). The threshold filter applies to RAW scores
+    // (cosine / token+substring) BEFORE any RRF — for Hybrid the
+    // filter is enforced inside `hybrid_search` per-sub-list.
     let hits = match mode {
-        SearchMode::Semantic => memory_search(
-            ctx,
-            storage,
-            embedder,
-            vector_index,
-            &MemoryQuery::Text(p.query.clone()),
-            p.limit,
-            preview_len,
-            scope_filter.as_ref(),
-        )
-        .await
-        .map_err(|e| DispatchError::Other(anyhow!("memory.search (semantic) failed: {e}")))?,
-        SearchMode::Text => memory_text_search(
-            ctx,
-            storage,
-            &p.query,
-            p.limit,
-            preview_len,
-            scope_filter.as_ref(),
-        )
-        .await
-        .map_err(|e| DispatchError::Other(anyhow!("memory.search (text) failed: {e}")))?,
+        SearchMode::Semantic => {
+            let mut results = memory_search(
+                ctx,
+                storage,
+                embedder,
+                vector_index,
+                &MemoryQuery::Text(p.query.clone()),
+                p.limit,
+                preview_len,
+                scope_filter.as_ref(),
+            )
+            .await
+            .map_err(|e| DispatchError::Other(anyhow!("memory.search (semantic) failed: {e}")))?;
+            results.retain(|r| r.similarity >= min_similarity);
+            results
+        }
+        SearchMode::Text => {
+            let mut results = memory_text_search(
+                ctx,
+                storage,
+                &p.query,
+                p.limit,
+                preview_len,
+                scope_filter.as_ref(),
+            )
+            .await
+            .map_err(|e| DispatchError::Other(anyhow!("memory.search (text) failed: {e}")))?;
+            results.retain(|r| r.similarity >= min_similarity);
+            results
+        }
         SearchMode::Hybrid => memory_hybrid_search(
             ctx,
             storage,
@@ -765,6 +784,7 @@ async fn memory_search_method(
             p.limit,
             preview_len,
             scope_filter.as_ref(),
+            min_similarity,
         )
         .await
         .map_err(|e| DispatchError::Other(anyhow!("memory.search (hybrid) failed: {e}")))?,

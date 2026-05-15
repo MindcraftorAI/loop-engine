@@ -640,7 +640,13 @@ pub async fn text_search(
 ///
 /// Over-fetches `k * 2` from each sub-search so the merged top-k is
 /// drawn from a wider pool when sources disagree on ranking.
-#[allow(clippy::too_many_arguments)] // 8 args is fundamental to the operation
+///
+/// `min_similarity` is applied to the RAW per-source scores BEFORE
+/// RRF — cosine for semantic hits, token+substring for text hits.
+/// Pass `0.0` to disable. RRF scores are NOT comparable to raw
+/// scores; the threshold therefore makes no sense post-merge and is
+/// only ever applied here.
+#[allow(clippy::too_many_arguments)] // 9 args is fundamental to the operation
 pub async fn hybrid_search(
     ctx: &Context,
     storage: &dyn Storage,
@@ -650,6 +656,7 @@ pub async fn hybrid_search(
     k: usize,
     body_preview_len: usize,
     scope_filter: Option<&MemoryScopeFilter>,
+    min_similarity: f32,
 ) -> Result<Vec<MemoryRef>, EngineError> {
     /// RRF damping constant. Cormack et al. 2009 — survives well
     /// across domains; mirrors the opensquid-side `RRF_K = 60`.
@@ -658,6 +665,9 @@ pub async fn hybrid_search(
 
     // Run both paths. Soft-fail on individual sub-search errors so
     // a hybrid call doesn't lose ALL results when one path stumbles.
+    // Each sub-list is filtered by `min_similarity` BEFORE RRF so
+    // the threshold means "raw per-source signal floor" — RRF scores
+    // are in a different range and can't share the threshold.
     let semantic_results = match search(
         ctx,
         storage,
@@ -670,7 +680,10 @@ pub async fn hybrid_search(
     )
     .await
     {
-        Ok(r) => r,
+        Ok(mut r) => {
+            r.retain(|h| h.similarity >= min_similarity);
+            r
+        }
         Err(e) => {
             warn!(error = %e, "hybrid_search: semantic sub-search failed; continuing with text only");
             Vec::new()
@@ -686,7 +699,10 @@ pub async fn hybrid_search(
     )
     .await
     {
-        Ok(r) => r,
+        Ok(mut r) => {
+            r.retain(|h| h.similarity >= min_similarity);
+            r
+        }
         Err(e) => {
             warn!(error = %e, "hybrid_search: text sub-search failed; continuing with semantic only");
             Vec::new()
@@ -2008,6 +2024,7 @@ mod tests {
             5,
             240,
             None,
+            0.0,
         )
         .await
         .unwrap();
