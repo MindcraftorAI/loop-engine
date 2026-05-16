@@ -1,0 +1,157 @@
+name: Release
+
+# Cross-target binary build matrix. Triggered by `v*` tag push.
+#
+# Builds the `loop-engine` binary for 6 (os, arch) targets, strips,
+# packages each as a tar.gz / zip, and uploads them as GitHub Release
+# assets. Distribution downstream (npm, brew, manual download) is
+# substrate-agnostic and lives in consumer repos — this workflow knows
+# only about the engine binary.
+#
+# Targets:
+#   x86_64-apple-darwin        → macos-13       (Intel Mac native)
+#   aarch64-apple-darwin       → macos-latest   (Apple Silicon native)
+#   x86_64-unknown-linux-gnu   → ubuntu-latest  (native)
+#   aarch64-unknown-linux-gnu  → ubuntu-latest  (cross via gcc-aarch64)
+#   x86_64-pc-windows-msvc     → windows-latest (native)
+#   aarch64-pc-windows-msvc    → windows-latest (MSVC cross)
+#
+# Release profile (Cargo.toml [profile.release]) already sets
+# strip="symbols" / lto="thin" / panic="abort" / codegen-units=1, so
+# binaries are distribution-ready at `target/<triple>/release/`.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to attach release assets to (manual runs)"
+        required: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+
+permissions:
+  contents: write  # required to upload release assets
+
+jobs:
+  build:
+    name: build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-apple-darwin
+            os: macos-13
+            archive: tar.gz
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            archive: tar.gz
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            archive: tar.gz
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            archive: tar.gz
+            cross_linker: aarch64-linux-gnu-gcc
+            apt_packages: gcc-aarch64-linux-gnu
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            archive: zip
+          - target: aarch64-pc-windows-msvc
+            os: windows-latest
+            archive: zip
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: install rust toolchain for ${{ matrix.target }}
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: install linux cross-toolchain
+        if: matrix.apt_packages != ''
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ${{ matrix.apt_packages }}
+
+      - name: configure linker for ${{ matrix.target }}
+        if: matrix.cross_linker != ''
+        run: |
+          echo "CARGO_TARGET_$(echo ${{ matrix.target }} | tr 'a-z-' 'A-Z_')_LINKER=${{ matrix.cross_linker }}" >> "$GITHUB_ENV"
+
+      - name: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --release --target ${{ matrix.target }} --bin loop-engine
+
+      - name: package binary (unix tar.gz)
+        if: matrix.archive == 'tar.gz'
+        shell: bash
+        run: |
+          set -euo pipefail
+          STAGE="loop-engine-${{ github.ref_name }}-${{ matrix.target }}"
+          mkdir -p "dist/$STAGE"
+          cp "target/${{ matrix.target }}/release/loop-engine" "dist/$STAGE/loop-engine"
+          cp README.md LICENSE THIRD_PARTY_LICENSES.md "dist/$STAGE/" 2>/dev/null || true
+          tar -czf "dist/$STAGE.tar.gz" -C dist "$STAGE"
+          shasum -a 256 "dist/$STAGE.tar.gz" > "dist/$STAGE.tar.gz.sha256"
+
+      - name: package binary (windows zip)
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          $stage = "loop-engine-${{ github.ref_name }}-${{ matrix.target }}"
+          New-Item -ItemType Directory -Force -Path "dist/$stage" | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/loop-engine.exe" "dist/$stage/loop-engine.exe"
+          if (Test-Path "README.md") { Copy-Item "README.md" "dist/$stage/" }
+          if (Test-Path "LICENSE") { Copy-Item "LICENSE" "dist/$stage/" }
+          if (Test-Path "THIRD_PARTY_LICENSES.md") { Copy-Item "THIRD_PARTY_LICENSES.md" "dist/$stage/" }
+          Compress-Archive -Path "dist/$stage" -DestinationPath "dist/$stage.zip"
+          $hash = Get-FileHash -Algorithm SHA256 "dist/$stage.zip"
+          "$($hash.Hash.ToLower())  $stage.zip" | Out-File -Encoding ascii "dist/$stage.zip.sha256"
+
+      - name: upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: loop-engine-${{ matrix.target }}
+          path: |
+            dist/*.tar.gz
+            dist/*.tar.gz.sha256
+            dist/*.zip
+            dist/*.zip.sha256
+          if-no-files-found: error
+
+  release:
+    name: publish github release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: list assets
+        run: ls -lah dist/
+
+      - name: create / update github release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: |
+            dist/*.tar.gz
+            dist/*.tar.gz.sha256
+            dist/*.zip
+            dist/*.zip.sha256
