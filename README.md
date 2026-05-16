@@ -132,6 +132,31 @@ The engine returns `Manifest` (engine-stable) but never serializes a wire
 format — adapter crates (the JSON-RPC server, or downstream binaries) own
 the wire shape via `From<&Manifest>` or `serde_json` projection.
 
+### Storage root convention
+
+The engine's default `$LOOP_HOME` is `~/.loop/`. Consumers (MCP server
+adapters, future TS/Python launchers) are expected to override this via
+the environment variable when spawning `loop-engine serve` as a
+subprocess, so each consumer gets an isolated data root:
+
+| Consumer | LOOP_HOME |
+|---|---|
+| Standalone (`loop-engine serve` from a shell) | `~/.loop/` (default) |
+| `opensquid` MCP server | `~/.opensquid/` (override in `engine-client.ts`) |
+| Future TS/Python launchers | their own choice |
+
+These trees DO NOT share state. Lessons, memories, and phase ledger
+entries written under one are invisible to the others. This is the
+intended design — a single engine binary can serve multiple consumers
+without their data colliding.
+
+Practical implication for engine-side debugging: if you run
+`loop-engine serve` directly and write data, it lands in `~/.loop/`,
+NOT in any consumer's tree. To force the engine binary to use a
+consumer's root for inspection: `LOOP_HOME=~/.opensquid loop-engine serve`.
+
+Decided 2026-05-16 (opensquid task #132).
+
 ---
 
 ## Stability
