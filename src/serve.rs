@@ -23,11 +23,11 @@
 
 use std::sync::Arc;
 
-use anyhow::{anyhow, Context as _, Result};
+use anyhow::{Context as _, Result, anyhow};
 use bytes::Bytes;
 use chrono::{SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tracing::warn;
 
@@ -37,14 +37,14 @@ use crate::engine::error::EngineError;
 use crate::engine::lessons::gate::PromotionConfig;
 use crate::engine::lessons::loader::get_by_id as load_lesson;
 use crate::engine::lessons::transitions::{
-    capture_feedback as transitions_capture_feedback, discard, promote,
-    supersede as transitions_supersede, FeedbackPolarity,
+    FeedbackPolarity, capture_feedback as transitions_capture_feedback, discard, promote,
+    supersede as transitions_supersede,
 };
 use crate::engine::memory::{
-    delete as memory_delete, get_by_id as memory_get_by_id, hybrid_search as memory_hybrid_search,
+    MemoryId, MemoryOrigin, MemoryQuery, MemoryScope, MemoryScopeFilter, delete as memory_delete,
+    get_by_id as memory_get_by_id, hybrid_search as memory_hybrid_search,
     insert_with_provenance as memory_insert_with_provenance, rehydrate_vector_index,
-    search as memory_search, text_search as memory_text_search, update as memory_update, MemoryId,
-    MemoryOrigin, MemoryQuery, MemoryScope, MemoryScopeFilter,
+    search as memory_search, text_search as memory_text_search, update as memory_update,
 };
 use crate::engine::paths;
 use crate::engine::scoring::score_text_match;
@@ -52,10 +52,10 @@ use crate::engine::storage::filesystem::LocalFsStorage;
 use crate::engine::storage::{Storage, StorageKey};
 use crate::engine::vector::{HnswVectorIndex, VectorIndex};
 use crate::engine::yaml::writer::serialize_lesson_frontmatter;
-use crate::engine::yaml::{combine_frontmatter, split_frontmatter_normalized};
 use crate::engine::yaml::{
-    reader::parse_lesson_frontmatter, Authorship, LessonFrontmatter, LessonStatus,
+    Authorship, LessonFrontmatter, LessonStatus, reader::parse_lesson_frontmatter,
 };
+use crate::engine::yaml::{combine_frontmatter, split_frontmatter_normalized};
 
 // ---- JSON-RPC wire types -------------------------------------------
 
@@ -159,10 +159,7 @@ pub async fn run() -> Result<()> {
         Ok(stats) => {
             eprintln!(
                 "[loop-engine serve] rehydrated {} memories (scanned {}, skipped {} missing-vec, {} parse-err)",
-                stats.inserted,
-                stats.scanned,
-                stats.skipped_missing_vec,
-                stats.skipped_parse_error,
+                stats.inserted, stats.scanned, stats.skipped_missing_vec, stats.skipped_parse_error,
             );
         }
         Err(e) => {
@@ -754,7 +751,7 @@ async fn lesson_capture_feedback(
         other => {
             return Err(DispatchError::InvalidParams(format!(
                 "polarity must be 'thumbs_up' or 'thumbs_down', got '{other}'"
-            )))
+            )));
         }
     };
     let signal_id = p
@@ -1220,10 +1217,10 @@ async fn memory_list(
             _ => continue,
         };
         // Apply scope filter if requested.
-        if let Some(filter) = &scope_filter {
-            if !filter.matches(&mem.frontmatter.scope) {
-                continue;
-            }
+        if let Some(filter) = &scope_filter
+            && !filter.matches(&mem.frontmatter.scope)
+        {
+            continue;
         }
         rows.push(json!({
             "id": mem.frontmatter.id.as_str(),
@@ -1416,7 +1413,7 @@ async fn manifest_assemble(
     embedder: &dyn Embedder,
     vector_index: &dyn VectorIndex,
 ) -> std::result::Result<Value, DispatchError> {
-    use crate::engine::manifest::{assemble, AssembleConfig};
+    use crate::engine::manifest::{AssembleConfig, assemble};
     use crate::engine::memory::MemoryQuery as EngineMemoryQuery;
     use crate::engine::yaml::LessonStatus as EngineLessonStatus;
 

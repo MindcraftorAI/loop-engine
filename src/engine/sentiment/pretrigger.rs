@@ -249,8 +249,10 @@ mod tests {
 
     #[test]
     fn does_not_fire_on_neutral_text() {
-        assert!(!pretrigger()
-            .fires_on("could you read the file at src/main.rs and tell me the imports"));
+        assert!(
+            !pretrigger()
+                .fires_on("could you read the file at src/main.rs and tell me the imports")
+        );
     }
 
     #[test]

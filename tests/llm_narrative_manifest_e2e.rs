@@ -18,10 +18,10 @@ use chrono::{DateTime, Utc};
 
 use loop_engine::engine::context::Context;
 use loop_engine::engine::lessons::{
-    get_by_id, narrative::generate as generate_narrative, NarrativeConfig, NarrativeContext,
+    NarrativeConfig, NarrativeContext, get_by_id, narrative::generate as generate_narrative,
 };
 use loop_engine::engine::llm::{Generation, LlmClient, MockLlmClient};
-use loop_engine::engine::manifest::{assemble, AssembleConfig};
+use loop_engine::engine::manifest::{AssembleConfig, assemble};
 use loop_engine::engine::storage::{MemoryStorage, Storage, StorageKey};
 
 fn now() -> DateTime<Utc> {
@@ -78,9 +78,11 @@ async fn narrative_generation_produces_struct_consumed_by_manifest_gate() {
     use loop_engine::engine::lessons::{BlockReason, GateDecision};
     match gate_before {
         GateDecision::Block { reasons } => {
-            assert!(reasons
-                .iter()
-                .any(|r| matches!(r, BlockReason::MissingCausalNarrative)));
+            assert!(
+                reasons
+                    .iter()
+                    .any(|r| matches!(r, BlockReason::MissingCausalNarrative))
+            );
         }
         other => panic!("expected pre-narrative block, got {other:?}"),
     }
@@ -193,8 +195,8 @@ async fn narrative_validation_failure_does_not_persist() {
     // `narrative::generate` has no storage arg. The re-assemble is
     // the actual end-to-end claim.
     use loop_engine::engine::lessons::{BlockReason, GateDecision};
-    use loop_engine::engine::manifest::assemble;
     use loop_engine::engine::manifest::AssembleConfig as Cfg;
+    use loop_engine::engine::manifest::assemble;
 
     let ctx = Context::single_user_local();
     let storage: Arc<dyn Storage> = Arc::new(MemoryStorage::default());

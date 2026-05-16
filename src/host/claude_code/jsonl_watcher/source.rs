@@ -144,10 +144,10 @@ fn translate(w: WatcherEvent) -> Result<EngineEvent, EventSourceError> {
 ///   2. `cwd.file_name()` basename if non-empty
 ///   3. `None` (no derivation possible)
 fn derive_project_tag(git_branch: &Option<String>, cwd: &Path) -> Option<ProjectTag> {
-    if let Some(branch) = git_branch.as_deref() {
-        if !branch.is_empty() {
-            return Some(ProjectTag::new(branch.to_string()));
-        }
+    if let Some(branch) = git_branch.as_deref()
+        && !branch.is_empty()
+    {
+        return Some(ProjectTag::new(branch.to_string()));
     }
     cwd.file_name()
         .and_then(|n| n.to_str())

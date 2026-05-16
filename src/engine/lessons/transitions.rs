@@ -30,14 +30,14 @@ use tracing::warn;
 
 use crate::engine::context::Context;
 use crate::engine::error::EngineError;
-use crate::engine::lessons::gate::{check_promotion_gate, GateDecision, PromotionConfig};
-use crate::engine::lessons::loader::{get_by_id, LoadedLesson};
+use crate::engine::lessons::gate::{GateDecision, PromotionConfig, check_promotion_gate};
+use crate::engine::lessons::loader::{LoadedLesson, get_by_id};
 use crate::engine::memory::decrement_citation_count;
 use crate::engine::storage::{Storage, StorageKey};
 use crate::engine::yaml::reader::parse_lesson_frontmatter;
 use crate::engine::yaml::writer::serialize_lesson_frontmatter;
 use crate::engine::yaml::{
-    combine_frontmatter, split_frontmatter_normalized, EvidenceRef, LessonFrontmatter, LessonStatus,
+    EvidenceRef, LessonFrontmatter, LessonStatus, combine_frontmatter, split_frontmatter_normalized,
 };
 
 /// CAS-RMW retry budget for transitions. Matches Phase A/F precedent.
@@ -156,13 +156,13 @@ async fn decrement_user_lesson_citations(
         return;
     };
     for evr in &cn.evidence_refs {
-        if let EvidenceRef::Memory(mid) = evr {
-            if let Err(e) = decrement_citation_count(ctx, storage, mid).await {
-                warn!(
-                    lesson = %fm.id, memory = %mid, error = %e,
-                    "transition: failed to decrement memory citation counter"
-                );
-            }
+        if let EvidenceRef::Memory(mid) = evr
+            && let Err(e) = decrement_citation_count(ctx, storage, mid).await
+        {
+            warn!(
+                lesson = %fm.id, memory = %mid, error = %e,
+                "transition: failed to decrement memory citation counter"
+            );
         }
     }
 }
@@ -529,7 +529,7 @@ pub async fn capture_feedback(
 mod tests {
     use super::*;
     use crate::engine::embedding::MockEmbedder;
-    use crate::engine::memory::{insert as insert_memory, MemoryId};
+    use crate::engine::memory::{MemoryId, insert as insert_memory};
     use crate::engine::storage::MemoryStorage;
     use crate::engine::test_support::TestHarness;
     use crate::engine::vector::HnswVectorIndex;
@@ -1050,14 +1050,16 @@ mod tests {
         .unwrap();
         assert_eq!(r.frontmatter.thumbs_up_count, 1);
         assert_eq!(r.frontmatter.thumbs_down_count, 0);
-        assert!(r
-            .frontmatter
-            .external_signal_sources
-            .iter()
-            .any(|s| s == "user_thumbs_up"));
-        assert!(r
-            .body
-            .contains("<!-- feedback: user_thumbs_up by sig-12345"));
+        assert!(
+            r.frontmatter
+                .external_signal_sources
+                .iter()
+                .any(|s| s == "user_thumbs_up")
+        );
+        assert!(
+            r.body
+                .contains("<!-- feedback: user_thumbs_up by sig-12345")
+        );
     }
 
     #[tokio::test]

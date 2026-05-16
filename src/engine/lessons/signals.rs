@@ -27,7 +27,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use anyhow::{anyhow, Context as _, Result};
+use anyhow::{Context as _, Result, anyhow};
 use bytes::Bytes;
 
 use crate::engine::context::Context;
@@ -39,7 +39,7 @@ use crate::engine::yaml::{combine_frontmatter, split_frontmatter_normalized};
 
 #[allow(deprecated)] // sync wrapper deliberately keeps the deprecated import
 use super::loader::get_lesson_by_id;
-use super::loader::{get_by_id, LoadedLesson};
+use super::loader::{LoadedLesson, get_by_id};
 #[allow(deprecated)] // sync wrapper still consumes the deprecated lock helper
 use super::lock::with_lock;
 
@@ -360,7 +360,7 @@ mod tests {
     use super::*;
     use crate::engine::paths;
     use crate::engine::paths::ENV_LOCK;
-    use crate::engine::yaml::{combine_frontmatter, LessonFrontmatter, LessonStatus};
+    use crate::engine::yaml::{LessonFrontmatter, LessonStatus, combine_frontmatter};
     use tempfile::TempDir;
 
     fn with_temp_loop_home<F: FnOnce(&TempDir) -> Result<()>>(f: F) {

@@ -9,8 +9,8 @@
 #![cfg(any(test, feature = "test-fixtures"))]
 
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use async_trait::async_trait;
 
@@ -18,7 +18,7 @@ use crate::engine::context::Context;
 use crate::engine::llm::error::LlmError;
 use crate::engine::llm::request::GenerateRequest;
 use crate::engine::llm::response::{FinishReason, Generation};
-use crate::engine::llm::{sealed::Sealed, LlmClient};
+use crate::engine::llm::{LlmClient, sealed::Sealed};
 
 /// Phase D audit A-M2 fix: aligned with `MockSentimentClassifier`
 /// precedent — `VecDeque` for O(1) FIFO drain (was `Vec::remove(0)`

@@ -20,7 +20,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 use crate::engine::context::Context;
-use crate::engine::embedding::{sealed, Embedder, EmbeddingError};
+use crate::engine::embedding::{Embedder, EmbeddingError, sealed};
 
 /// HTTP timeout for a single batch. Conservative — local Ollama on a
 /// laptop can take ~1s per text on a cold model; bumped to 60s to

@@ -27,7 +27,7 @@
 use std::fs::OpenOptions;
 use std::path::{Path, PathBuf};
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use fd_lock::RwLock;
 
 /// Compute the sidecar lock file path for a given lesson file.
@@ -91,8 +91,8 @@ where
 mod tests {
     use super::*;
     use std::sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     };
     use std::thread;
     use std::time::Duration;

@@ -132,7 +132,7 @@ pub enum LoadedItemKind {
 // =====================================================================
 
 macro_rules! impl_confidence_newtype {
-    ($name:ident, $doc:expr) => {
+    ($name:ident, $doc:expr_2021) => {
         #[doc = $doc]
         ///
         /// Wrapped `f32`, clamped to `[0.0, 1.0]` at construction. Distinct

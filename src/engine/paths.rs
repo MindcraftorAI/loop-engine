@@ -7,7 +7,7 @@
 use std::env;
 use std::path::PathBuf;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 
 pub const LOOP_HOME_ENV: &str = "LOOP_HOME";
 
@@ -23,10 +23,10 @@ pub(crate) static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Resolve LOOP_HOME — env var if set and non-empty, else `~/.loop`.
 pub fn loop_home() -> Result<PathBuf> {
-    if let Ok(value) = env::var(LOOP_HOME_ENV) {
-        if !value.is_empty() {
-            return Ok(PathBuf::from(value));
-        }
+    if let Ok(value) = env::var(LOOP_HOME_ENV)
+        && !value.is_empty()
+    {
+        return Ok(PathBuf::from(value));
     }
     let home = dirs::home_dir().ok_or_else(|| anyhow!("could not determine home directory"))?;
     Ok(home.join(".loop"))

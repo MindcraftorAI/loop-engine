@@ -3,30 +3,52 @@
 All notable changes to `loop-engine` are documented here.
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
-This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
+SemVer note: this crate is in active development at 0.x. Per
+SemVer.org §4, anything MAY change at any time at 0.x — the wire
+shape, the public API, the on-disk layout. 1.0 is reserved for when
+the RPC surface is committed to backward-compatibility against an
+external consumer.
 
 ---
 
 ## [Unreleased]
 
-## [1.4.0] — 2026-05-16
+## [0.4.0] — 2026-05-16
 
-Version-bump catch-up. The v1.1 / v1.2 / v1.3 / v1.4 commits between
-2026-05-13 and 2026-05-16 (`69fa253` through `3ba7e41`) shipped their
-features but left `Cargo.toml` at `1.1.0`. This release stamps the
-crate version to match the actual feature surface in `main`.
+**Version reset: 1.x → 0.4.0.**
 
-Also includes the `ci(release)` cross-target build matrix workflow
-(`c9e5b0d`) so this is the first version that can produce
-distribution binaries via the GitHub Actions matrix:
-`{x86_64,aarch64}-apple-darwin`, `{x86_64,aarch64}-unknown-linux-gnu`,
-`{x86_64,aarch64}-pc-windows-msvc`.
+Earlier commits (`69fa253 v1.1` through `3ba7e41 v1.4`) used
+commit-message labels in the `vX.Y` shape but never bumped
+`Cargo.toml` or cut releases. The crate was stuck at `1.1.0` while
+the labels claimed v1.4. The first reflexive fix bumped Cargo.toml
+to `1.4.0` to match the labels — but the deeper problem was that
+the crate had been at 1.x since before it should have been. No
+external consumer, no committed API stability, RPC surface still
+being expanded weekly (5 new methods this week alone). 1.0 was
+premature.
 
-Workflow fix: tar.gz packaging step now runs `chmod +x` before
-archiving (so the executable bit survives the tarball roundtrip) and
-generates the sha256 sidecar from inside `dist/` (so the embedded
-path is bare `<file>.tar.gz`, not `dist/<file>.tar.gz` — lets
-`shasum -c` work cleanly from the dist dir).
+This release demotes the crate to **0.4.0** to reflect actual
+maturity: pre-1.0, public API allowed to change, version bumps
+allowed to be additive without ceremony. Re-cross 1.0 only when
+there's an external consumer asking for stability + a commitment to
+non-breaking changes for a defined window.
+
+Also removes the strict `public-api stability gate` from CI. The
+gate diffed against `public-api-v1.0.txt`; every additive RPC failed
+it (CI red since 2026-05-13's external_id upsert commit). At 0.x the
+gate is the wrong tool. Re-add it (with a fresh baseline) when
+crossing 1.0 for real.
+
+The actual feature content stays — all the work from `69fa253`
+through `c9e5b0d` is in `main`. Only the version label changes. The
+inventory below documents what shipped under the `v1.x` labels;
+treat them as pre-1.0 milestones now.
+
+Workflow polish included: tar.gz packaging step now runs `chmod +x`
+before archiving (so the executable bit survives the tarball
+roundtrip) and generates the sha256 sidecar from inside `dist/` (so
+the embedded path is bare `<file>.tar.gz` — lets `shasum -c` work
+cleanly from the dist dir).
 
 ### Added — v1.1 Pack-authored lesson seeding
 

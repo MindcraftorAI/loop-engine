@@ -14,7 +14,7 @@ use crate::engine::manifest::{ActiveLesson, AssembleConfig};
 use crate::engine::memory::MemoryRef;
 use crate::engine::storage::{Storage, StorageKey};
 use crate::engine::yaml::{
-    reader::parse_lesson_frontmatter, split_frontmatter_normalized, LessonFrontmatter, LessonStatus,
+    LessonFrontmatter, LessonStatus, reader::parse_lesson_frontmatter, split_frontmatter_normalized,
 };
 
 /// Internal: per-lesson record carrying both the public-facing
@@ -149,10 +149,10 @@ pub(super) async fn filter_refs_by_scope(
     for r in refs {
         // Missing or load-failure → drop silently (race window
         // against a concurrent delete; not an error).
-        if let Ok(Some(mem)) = crate::engine::memory::get_by_id(ctx, storage, &r.id).await {
-            if filter.matches(&mem.frontmatter.scope) {
-                out.push(r);
-            }
+        if let Ok(Some(mem)) = crate::engine::memory::get_by_id(ctx, storage, &r.id).await
+            && filter.matches(&mem.frontmatter.scope)
+        {
+            out.push(r);
         }
     }
     out

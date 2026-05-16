@@ -140,7 +140,7 @@ impl SignalWriteError {
 #[async_trait]
 pub trait SignalWriter: Send + Sync + std::fmt::Debug {
     async fn record(&self, ctx: &Context, signal: &SentimentSignal)
-        -> Result<(), SignalWriteError>;
+    -> Result<(), SignalWriteError>;
 }
 
 /// `tracing`-backed `SignalWriter`. Writes each signal as an INFO event

@@ -25,8 +25,8 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tracing::{debug, warn};
 
 use super::cursor::{CursorAction, FileCursor};
-use super::events::{WatcherEvent, PARSE_ERROR_REPORT_EVERY};
-use super::parser::{parse_line, ParseOutcome};
+use super::events::{PARSE_ERROR_REPORT_EVERY, WatcherEvent};
+use super::parser::{ParseOutcome, parse_line};
 
 /// Maximum bytes to read in a single `read_appended` call. Caps the
 /// memory footprint per event in case a session balloons.

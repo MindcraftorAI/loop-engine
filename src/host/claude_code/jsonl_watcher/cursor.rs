@@ -12,7 +12,7 @@ use std::io::{Read, Seek, SeekFrom};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 
 /// Per-file state for tail-as-it-grows. One per JSONL file under watch.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -83,17 +83,17 @@ where
         return Some(a);
     }
     let candidates = recently_referenced_items(loaded_items, recent_turns);
-    if (2..=5).contains(&candidates.len()) {
-        if let Some((item_id, conf)) = fallback(&candidates) {
-            // Threshold: the judge must clear `PASS4_MIN_CONFIDENCE`
-            // (0.8) or we abstain rather than guess.
-            if conf.value() >= PASS4_MIN_CONFIDENCE {
-                return Some(Attribution {
-                    item_id,
-                    method: AttributionMethod::Salience,
-                    confidence: conf,
-                });
-            }
+    if (2..=5).contains(&candidates.len())
+        && let Some((item_id, conf)) = fallback(&candidates)
+    {
+        // Threshold: the judge must clear `PASS4_MIN_CONFIDENCE`
+        // (0.8) or we abstain rather than guess.
+        if conf.value() >= PASS4_MIN_CONFIDENCE {
+            return Some(Attribution {
+                item_id,
+                method: AttributionMethod::Salience,
+                confidence: conf,
+            });
         }
     }
     None

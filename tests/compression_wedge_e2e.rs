@@ -24,14 +24,14 @@ use loop_engine::engine::context::Context;
 use loop_engine::engine::embedding::MockEmbedder;
 use loop_engine::engine::llm::{Generation, MockLlmClient};
 use loop_engine::engine::memory::{
-    compress, delete, get_by_id, get_by_id_chasing_derived_from, increment_citation_count, insert,
-    recompute_citation_counts, CompressionConfig, CompressionWindow, MemoryId,
+    CompressionConfig, CompressionWindow, MemoryId, compress, delete, get_by_id,
+    get_by_id_chasing_derived_from, increment_citation_count, insert, recompute_citation_counts,
 };
 use loop_engine::engine::storage::{MemoryStorage, Storage, StorageKey};
 use loop_engine::engine::vector::HnswVectorIndex;
 use loop_engine::engine::yaml::{
-    combine_frontmatter, writer::serialize_lesson_frontmatter, Authorship, CausalNarrative,
-    Confidence, EvidenceRef, GeneratedBy, LessonFrontmatter, LessonStatus,
+    Authorship, CausalNarrative, Confidence, EvidenceRef, GeneratedBy, LessonFrontmatter,
+    LessonStatus, combine_frontmatter, writer::serialize_lesson_frontmatter,
 };
 
 fn ctx() -> Context {

@@ -149,12 +149,10 @@ pub async fn delete(
     force: bool,
 ) -> Result<(), EngineError> {
     let key = StorageKey::persona(ctx, id);
-    if !force {
-        if let Some(bytes) = storage.get(&key).await? {
-            let (fm, _body) = parse_file(&bytes)?;
-            if fm.authored_by.is_immune() {
-                return Err(EngineError::UserPersonaImmune { id: id.to_string() });
-            }
+    if !force && let Some(bytes) = storage.get(&key).await? {
+        let (fm, _body) = parse_file(&bytes)?;
+        if fm.authored_by.is_immune() {
+            return Err(EngineError::UserPersonaImmune { id: id.to_string() });
         }
     }
     storage.delete(&key).await?;
@@ -249,10 +247,12 @@ mod tests {
         let r = delete(&ctx(), storage.as_ref(), "pers-del1", false).await;
         assert!(matches!(r, Err(EngineError::UserPersonaImmune { .. })));
         // Persona still present.
-        assert!(get_by_id(&ctx(), storage.as_ref(), "pers-del1")
-            .await
-            .unwrap()
-            .is_some());
+        assert!(
+            get_by_id(&ctx(), storage.as_ref(), "pers-del1")
+                .await
+                .unwrap()
+                .is_some()
+        );
     }
 
     #[tokio::test]
@@ -266,10 +266,12 @@ mod tests {
         delete(&ctx(), storage.as_ref(), "pers-rmf1", true)
             .await
             .unwrap();
-        assert!(get_by_id(&ctx(), storage.as_ref(), "pers-rmf1")
-            .await
-            .unwrap()
-            .is_none());
+        assert!(
+            get_by_id(&ctx(), storage.as_ref(), "pers-rmf1")
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[tokio::test]

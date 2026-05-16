@@ -13,8 +13,8 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, Context, Result};
-use tokio::signal::unix::{signal, SignalKind};
+use anyhow::{Context, Result, anyhow, bail};
+use tokio::signal::unix::{SignalKind, signal};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
@@ -127,14 +127,14 @@ pub async fn heartbeat_loop(interval_secs: u64, shutdown: CancellationToken) {
 pub fn pre_detach_checks() -> Result<()> {
     paths::ensure_loop_dirs()?;
     let pid_path = paths::daemon_pid_path()?;
-    if let Some(existing) = read_pid_file(&pid_path)? {
-        if pid_is_alive(existing) {
-            bail!(
-                "another loop-engine appears to be running (pid={}). Run `loop-engine stop` first or remove {}",
-                existing,
-                pid_path.display()
-            );
-        }
+    if let Some(existing) = read_pid_file(&pid_path)?
+        && pid_is_alive(existing)
+    {
+        bail!(
+            "another loop-engine appears to be running (pid={}). Run `loop-engine stop` first or remove {}",
+            existing,
+            pid_path.display()
+        );
     }
     Ok(())
 }

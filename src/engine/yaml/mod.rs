@@ -24,8 +24,8 @@ mod schema;
 pub mod writer;
 
 pub use frontmatter::{
-    combine_frontmatter, split_frontmatter, split_frontmatter_normalized, FrontmatterSplit,
-    OwnedFrontmatterSplit,
+    FrontmatterSplit, OwnedFrontmatterSplit, combine_frontmatter, split_frontmatter,
+    split_frontmatter_normalized,
 };
 pub use schema::{
     Authorship, CausalNarrative, Confidence, EvidenceRef, GeneratedBy, IngestProvenance,

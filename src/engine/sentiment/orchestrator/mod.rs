@@ -54,7 +54,7 @@ use super::types::{
 
 pub use config::{HostVersionAction, HostVersionPolicy, OrchestratorConfig};
 use derive::derive_signals;
-use state::{push_turn, SessionPhase, SessionState};
+use state::{SessionPhase, SessionState, push_turn};
 
 // ---------------------------------------------------------------------
 // Orchestrator
@@ -230,28 +230,31 @@ impl Orchestrator {
         };
 
         // === Critical section 2: derive signals (RACE-SAFE per audit C1) ===
-        let (signals, abstentions) = if let Some(entry) = self.inner.sessions.get(&ctx.session_id) {
-            let mut state = entry.lock().expect("session state mutex poisoned");
-            let now = Instant::now();
-            let outcome = derive_signals(
-                &raw,
-                &request,
-                &state.rate_limit,
-                &self.inner.config,
-                now,
-                event_uuid,
-            );
-            for sig in &outcome.signals {
-                state.rate_limit.insert(sig.item_id.clone(), now);
+        let (signals, abstentions) = match self.inner.sessions.get(&ctx.session_id) {
+            Some(entry) => {
+                let mut state = entry.lock().expect("session state mutex poisoned");
+                let now = Instant::now();
+                let outcome = derive_signals(
+                    &raw,
+                    &request,
+                    &state.rate_limit,
+                    &self.inner.config,
+                    now,
+                    event_uuid,
+                );
+                for sig in &outcome.signals {
+                    state.rate_limit.insert(sig.item_id.clone(), now);
+                }
+                state.phase = SessionPhase::Idle;
+                state.turn_count += 1;
+                (outcome.signals, outcome.abstentions)
             }
-            state.phase = SessionPhase::Idle;
-            state.turn_count += 1;
-            (outcome.signals, outcome.abstentions)
-        } else {
-            // Audit C1 fix: session was removed via SessionEnded while
-            // the classifier call was in flight. Abstain rather than
-            // resurrect state for an ended session.
-            (vec![], vec![(None, AbstainReason::SessionRecycled)])
+            _ => {
+                // Audit C1 fix: session was removed via SessionEnded while
+                // the classifier call was in flight. Abstain rather than
+                // resurrect state for an ended session.
+                (vec![], vec![(None, AbstainReason::SessionRecycled)])
+            }
         };
 
         for sig in &signals {
@@ -319,11 +322,11 @@ impl Orchestrator {
             let mut signals = Vec::with_capacity(item_ids.len());
             let mut abstentions = Vec::new();
             for item_id in item_ids {
-                if let Some(&last) = state.rate_limit.get(&item_id) {
-                    if now.duration_since(last) < cooldown {
-                        abstentions.push((Some(item_id.clone()), AbstainReason::RateLimited));
-                        continue;
-                    }
+                if let Some(&last) = state.rate_limit.get(&item_id)
+                    && now.duration_since(last) < cooldown
+                {
+                    abstentions.push((Some(item_id.clone()), AbstainReason::RateLimited));
+                    continue;
                 }
                 let sig = SentimentSignal {
                     item_id: item_id.clone(),
@@ -633,10 +636,11 @@ mod tests {
                 &user_turn_event_with_host_version(&ctx.session_id, "0.0.0"),
             )
             .await;
-        assert!(out
-            .abstentions
-            .iter()
-            .all(|(_, r)| !matches!(r, AbstainReason::UntestedHostVersion)));
+        assert!(
+            out.abstentions
+                .iter()
+                .all(|(_, r)| !matches!(r, AbstainReason::UntestedHostVersion))
+        );
         assert_eq!(
             classifier_arc.call_count(),
             1,
@@ -720,9 +724,10 @@ mod tests {
             .await;
         // No UntestedHostVersion abstain — mock classifier's empty-queue
         // ClassifierAbstained is the only abstention here.
-        assert!(out
-            .abstentions
-            .iter()
-            .all(|(_, r)| !matches!(r, AbstainReason::UntestedHostVersion)));
+        assert!(
+            out.abstentions
+                .iter()
+                .all(|(_, r)| !matches!(r, AbstainReason::UntestedHostVersion))
+        );
     }
 }

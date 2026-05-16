@@ -16,7 +16,7 @@
 //! block. The `serialize_lesson_frontmatter` writer in `writer.rs`
 //! handles the YAML inside; this module handles the outer envelope.
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 
 /// Result of splitting a lesson file into its frontmatter block and body.
 #[derive(Debug, Clone, PartialEq, Eq)]

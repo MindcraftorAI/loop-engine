@@ -581,9 +581,11 @@ mod tests {
         let dec = check_promotion_gate(&fm, &md, &PromotionConfig::default(), now());
         match dec {
             GateDecision::Block { reasons } => {
-                assert!(reasons
-                    .iter()
-                    .any(|r| matches!(r, BlockReason::MalformedCreatedAt { .. })));
+                assert!(
+                    reasons
+                        .iter()
+                        .any(|r| matches!(r, BlockReason::MalformedCreatedAt { .. }))
+                );
             }
             other => panic!("expected block, got {other:?}"),
         }
@@ -602,12 +604,16 @@ mod tests {
         match dec {
             GateDecision::Block { reasons } => {
                 // Both FutureCreatedAt and TimeFloor fire (D8 — both surfaces are diagnostic).
-                assert!(reasons
-                    .iter()
-                    .any(|r| matches!(r, BlockReason::FutureCreatedAt { .. })));
-                assert!(reasons
-                    .iter()
-                    .any(|r| matches!(r, BlockReason::TimeFloor { .. })));
+                assert!(
+                    reasons
+                        .iter()
+                        .any(|r| matches!(r, BlockReason::FutureCreatedAt { .. }))
+                );
+                assert!(
+                    reasons
+                        .iter()
+                        .any(|r| matches!(r, BlockReason::TimeFloor { .. }))
+                );
             }
             other => panic!("expected block, got {other:?}"),
         }
@@ -622,9 +628,11 @@ mod tests {
         let dec = check_promotion_gate(&fm, &md, &PromotionConfig::default(), now());
         match dec {
             GateDecision::Block { reasons } => {
-                assert!(reasons
-                    .iter()
-                    .any(|r| matches!(r, BlockReason::TimeFloor { .. })));
+                assert!(
+                    reasons
+                        .iter()
+                        .any(|r| matches!(r, BlockReason::TimeFloor { .. }))
+                );
             }
             other => panic!("expected block, got {other:?}"),
         }
@@ -660,9 +668,11 @@ mod tests {
         let dec = check_promotion_gate(&fm, &md, &PromotionConfig::default(), now());
         match dec {
             GateDecision::Block { reasons } => {
-                assert!(reasons
-                    .iter()
-                    .any(|r| matches!(r, BlockReason::TamperedAge { .. })));
+                assert!(
+                    reasons
+                        .iter()
+                        .any(|r| matches!(r, BlockReason::TamperedAge { .. }))
+                );
             }
             other => panic!("expected block, got {other:?}"),
         }
@@ -715,9 +725,11 @@ mod tests {
         let dec = check_promotion_gate(&fm, &md, &PromotionConfig::default(), now());
         match dec {
             GateDecision::Block { reasons } => {
-                assert!(reasons
-                    .iter()
-                    .any(|r| matches!(r, BlockReason::ThumbsDownBlock { count: 1 })));
+                assert!(
+                    reasons
+                        .iter()
+                        .any(|r| matches!(r, BlockReason::ThumbsDownBlock { count: 1 }))
+                );
             }
             other => panic!("expected block, got {other:?}"),
         }
@@ -843,9 +855,11 @@ mod tests {
         let dec = check_promotion_gate(&fm, &md, &PromotionConfig::default(), now());
         match dec {
             GateDecision::Block { reasons } => {
-                assert!(reasons
-                    .iter()
-                    .any(|r| matches!(r, BlockReason::ThumbsDownBlock { .. })));
+                assert!(
+                    reasons
+                        .iter()
+                        .any(|r| matches!(r, BlockReason::ThumbsDownBlock { .. }))
+                );
                 assert!(reasons.contains(&BlockReason::MissingCausalNarrative));
                 assert!(reasons.contains(&BlockReason::MissingExternalSignalSources));
             }
@@ -868,9 +882,11 @@ mod tests {
         let dec = check_promotion_gate(&fm, &md, &PromotionConfig::default(), now());
         match dec {
             GateDecision::Block { reasons } => {
-                assert!(reasons
-                    .iter()
-                    .any(|r| matches!(r, BlockReason::MalformedCreatedAt { .. })));
+                assert!(
+                    reasons
+                        .iter()
+                        .any(|r| matches!(r, BlockReason::MalformedCreatedAt { .. }))
+                );
                 assert!(reasons.contains(&BlockReason::SpeculativeNarrative));
             }
             other => panic!("expected block, got {other:?}"),

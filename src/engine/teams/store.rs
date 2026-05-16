@@ -144,12 +144,10 @@ pub async fn delete(
     force: bool,
 ) -> Result<(), EngineError> {
     let key = StorageKey::team(ctx, id);
-    if !force {
-        if let Some(bytes) = storage.get(&key).await? {
-            let (fm, _body) = parse_file(&bytes)?;
-            if fm.authored_by.is_immune() {
-                return Err(EngineError::UserTeamImmune { id: id.to_string() });
-            }
+    if !force && let Some(bytes) = storage.get(&key).await? {
+        let (fm, _body) = parse_file(&bytes)?;
+        if fm.authored_by.is_immune() {
+            return Err(EngineError::UserTeamImmune { id: id.to_string() });
         }
     }
     storage.delete(&key).await?;
@@ -228,10 +226,12 @@ mod tests {
             .unwrap();
         let r = delete(&ctx(), storage.as_ref(), "tm-del00", false).await;
         assert!(matches!(r, Err(EngineError::UserTeamImmune { .. })));
-        assert!(get_by_id(&ctx(), storage.as_ref(), "tm-del00")
-            .await
-            .unwrap()
-            .is_some());
+        assert!(
+            get_by_id(&ctx(), storage.as_ref(), "tm-del00")
+                .await
+                .unwrap()
+                .is_some()
+        );
     }
 
     #[tokio::test]
@@ -245,10 +245,12 @@ mod tests {
         delete(&ctx(), storage.as_ref(), "tm-rmf00", true)
             .await
             .unwrap();
-        assert!(get_by_id(&ctx(), storage.as_ref(), "tm-rmf00")
-            .await
-            .unwrap()
-            .is_none());
+        assert!(
+            get_by_id(&ctx(), storage.as_ref(), "tm-rmf00")
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[tokio::test]

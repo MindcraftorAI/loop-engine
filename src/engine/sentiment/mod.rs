@@ -20,7 +20,7 @@ pub mod signals;
 pub mod solicitor;
 pub mod types;
 
-pub use attribution::{attribute_signal, attribute_signal_with_fallback, Attribution};
+pub use attribution::{Attribution, attribute_signal, attribute_signal_with_fallback};
 pub use classifier::{ClassifierError, SentimentClassifier};
 // Audit M6 fix: `SessionState` / `SessionPhase` are internal plumbing
 // and not part of the engine's public surface. Only `Orchestrator` +
@@ -32,7 +32,7 @@ pub use signals::{
     SignalWriter, StorageBackedSignalWriter,
 };
 pub use solicitor::{
-    solicit_stale_lessons, SolicitorConfig, SolicitorOutput, StaleCandidate, StaleReason,
+    SolicitorConfig, SolicitorOutput, StaleCandidate, StaleReason, solicit_stale_lessons,
 };
 pub use types::{
     AttributionConfidence, AttributionMethod, CalibratedConfidence, ClassificationRequest,

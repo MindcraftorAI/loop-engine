@@ -23,7 +23,7 @@
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tracing::warn;
 
 use crate::engine::context::Context;
@@ -482,14 +482,12 @@ mod tests {
         assert!(mc.is_compressed());
         assert!(mc.embedding.is_some());
         // Persisted under its minted id.
-        assert!(crate::engine::memory::store::get_by_id(
-            &ctx(),
-            storage.as_ref(),
-            &mc.frontmatter.id
-        )
-        .await
-        .unwrap()
-        .is_some());
+        assert!(
+            crate::engine::memory::store::get_by_id(&ctx(), storage.as_ref(), &mc.frontmatter.id)
+                .await
+                .unwrap()
+                .is_some()
+        );
     }
 
     #[tokio::test]
@@ -663,11 +661,12 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(mc.frontmatter.derived_from.len(), 2);
-        assert!(mc
-            .frontmatter
-            .derived_from
-            .iter()
-            .all(|i| { i.as_str() == "mem-prd00001" || i.as_str() == "mem-prd00002" }));
+        assert!(
+            mc.frontmatter
+                .derived_from
+                .iter()
+                .all(|i| { i.as_str() == "mem-prd00001" || i.as_str() == "mem-prd00002" })
+        );
     }
 
     #[tokio::test]

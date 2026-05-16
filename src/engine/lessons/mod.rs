@@ -24,20 +24,20 @@ pub mod signals;
 pub mod transitions;
 
 // Canonical async API (Phase A C4 + C5):
-pub use loader::{get_by_id, LessonFullContent, LoadedLesson};
-pub use signals::{record_applied, record_signal, SignalPolarity};
+pub use loader::{LessonFullContent, LoadedLesson, get_by_id};
+pub use signals::{SignalPolarity, record_applied, record_signal};
 
 // Phase B C-B2 — promotion gate (the marketing wedge):
-pub use gate::{check_promotion_gate, BlockReason, GateDecision, PassReason, PromotionConfig};
+pub use gate::{BlockReason, GateDecision, PassReason, PromotionConfig, check_promotion_gate};
 
 // Phase D C-D2 — causal-narrative generation. Function is re-exported
 // as `generate_narrative` to disambiguate from other future engine
 // `generate` functions when used via the prelude.
-pub use narrative::{generate as generate_narrative, NarrativeConfig, NarrativeContext};
+pub use narrative::{NarrativeConfig, NarrativeContext, generate as generate_narrative};
 
 // Phase G — lifecycle transitions.
 pub use transitions::{
-    capture_feedback, discard, promote, supersede, FeedbackPolarity, SupersedeBlockReason,
+    FeedbackPolarity, SupersedeBlockReason, capture_feedback, discard, promote, supersede,
 };
 
 // Deprecated sync wrappers — retained for backward compat through Phase

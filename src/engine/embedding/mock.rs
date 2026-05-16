@@ -14,17 +14,17 @@
 
 #![cfg(any(test, feature = "test-fixtures"))]
 
-use std::collections::hash_map::DefaultHasher;
 use std::collections::VecDeque;
+use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use async_trait::async_trait;
 
 use crate::engine::context::Context;
 use crate::engine::embedding::error::EmbeddingError;
-use crate::engine::embedding::{sealed::Sealed, Embedder};
+use crate::engine::embedding::{Embedder, sealed::Sealed};
 
 /// Phase D audit A-M2 fix: VecDeque + AtomicUsize matching the
 /// `MockSentimentClassifier` precedent.

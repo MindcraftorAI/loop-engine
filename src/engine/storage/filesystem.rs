@@ -16,11 +16,11 @@ use std::path::{Path, PathBuf};
 use async_trait::async_trait;
 use bytes::Bytes;
 
+use super::Storage;
 use super::error::StorageError;
 use super::key::StorageKey;
 use super::sealed::Sealed;
 use super::version::Version;
-use super::Storage;
 
 /// Local filesystem storage backend.
 ///

@@ -122,11 +122,11 @@ pub(super) fn derive_signals(
             continue;
         }
 
-        if let Some(&last) = rate_limit.get(&item.item_id) {
-            if now.duration_since(last) < config.per_lesson_cooldown {
-                abstentions.push((Some(item.item_id.clone()), AbstainReason::RateLimited));
-                continue;
-            }
+        if let Some(&last) = rate_limit.get(&item.item_id)
+            && now.duration_since(last) < config.per_lesson_cooldown
+        {
+            abstentions.push((Some(item.item_id.clone()), AbstainReason::RateLimited));
+            continue;
         }
 
         signals.push(SentimentSignal {

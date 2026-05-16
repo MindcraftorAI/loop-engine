@@ -16,14 +16,14 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::{anyhow, Context as _, Result};
+use anyhow::{Context as _, Result, anyhow};
 
 use crate::engine::context::Context;
 use crate::engine::error::EngineError;
 use crate::engine::paths;
 use crate::engine::storage::{Storage, StorageKey};
 use crate::engine::yaml::reader::parse_lesson_frontmatter;
-use crate::engine::yaml::{split_frontmatter_normalized, LessonFrontmatter};
+use crate::engine::yaml::{LessonFrontmatter, split_frontmatter_normalized};
 
 const LESSON_FILE_EXT: &str = ".md";
 /// Loose ID format guard. TS side uses generateLessonId which produces
@@ -226,7 +226,7 @@ mod tests {
     use super::*;
     use crate::engine::paths::ENV_LOCK;
     use crate::engine::yaml::{
-        combine_frontmatter, writer::serialize_lesson_frontmatter, LessonStatus,
+        LessonStatus, combine_frontmatter, writer::serialize_lesson_frontmatter,
     };
     use tempfile::TempDir;
 
@@ -334,9 +334,10 @@ mod tests {
     fn lesson_file_path_uses_status_dir() {
         with_temp_loop_home(|_| {
             let path = lesson_file_path("active", "les-aaaaaaaa")?;
-            assert!(path
-                .to_string_lossy()
-                .ends_with("/lessons/active/les-aaaaaaaa.md"));
+            assert!(
+                path.to_string_lossy()
+                    .ends_with("/lessons/active/les-aaaaaaaa.md")
+            );
             Ok(())
         });
     }
@@ -619,13 +620,17 @@ mod tests {
             .await
             .unwrap();
         // h2 has no lessons — should return None for the same id.
-        assert!(get_by_id(&h2.ctx, h2.storage.as_ref(), "les-onlyinh1")
-            .await
-            .unwrap()
-            .is_none());
-        assert!(get_by_id(&h1.ctx, h1.storage.as_ref(), "les-onlyinh1")
-            .await
-            .unwrap()
-            .is_some());
+        assert!(
+            get_by_id(&h2.ctx, h2.storage.as_ref(), "les-onlyinh1")
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            get_by_id(&h1.ctx, h1.storage.as_ref(), "les-onlyinh1")
+                .await
+                .unwrap()
+                .is_some()
+        );
     }
 }

@@ -95,7 +95,7 @@ pub(crate) fn embedding_to_bytes(vec: &[f32]) -> Vec<u8> {
 /// Reverse of [`embedding_to_bytes`]. Returns `Err` if the buffer
 /// length isn't a multiple of 4 OR doesn't match `expected_dims`.
 fn bytes_to_embedding(bytes: &[u8], expected_dims: usize) -> Result<Vec<f32>, EngineError> {
-    if bytes.len() % 4 != 0 {
+    if !bytes.len().is_multiple_of(4) {
         return Err(EngineError::Parse(format!(
             "embedding bytes length {} not a multiple of 4",
             bytes.len()
@@ -309,17 +309,17 @@ pub async fn update(
     };
     let mut fm = existing.frontmatter.clone();
     let mut changed = false;
-    if let Some(d) = description {
-        if d != fm.description {
-            fm.description = d;
-            changed = true;
-        }
+    if let Some(d) = description
+        && d != fm.description
+    {
+        fm.description = d;
+        changed = true;
     }
-    if let Some(s) = scope {
-        if s != fm.scope {
-            fm.scope = s;
-            changed = true;
-        }
+    if let Some(s) = scope
+        && s != fm.scope
+    {
+        fm.scope = s;
+        changed = true;
     }
     let content_changed = match &content {
         Some(c) => *c != existing.content,
@@ -501,10 +501,10 @@ pub async fn search(
         // between vector index entry and .md file) — log + skip.
         match get_by_id(ctx, storage, &hit.id).await {
             Ok(Some(mem)) => {
-                if let Some(f) = scope_filter {
-                    if !f.matches(&mem.frontmatter.scope) {
-                        continue;
-                    }
+                if let Some(f) = scope_filter
+                    && !f.matches(&mem.frontmatter.scope)
+                {
+                    continue;
                 }
                 let body_preview = mem
                     .content
@@ -587,10 +587,10 @@ pub async fn text_search(
                 continue;
             }
         };
-        if let Some(f) = scope_filter {
-            if !f.matches(&fm.scope) {
-                continue;
-            }
+        if let Some(f) = scope_filter
+            && !f.matches(&fm.scope)
+        {
+            continue;
         }
         let sim = crate::engine::scoring::score_text_match(query, &fm.description, &body);
         if sim <= 0.0 {
@@ -1369,11 +1369,13 @@ mod tests {
             .unwrap();
 
         // .md gone.
-        assert!(storage
-            .get(&StorageKey::memory(&ctx(), id.as_str()))
-            .await
-            .unwrap()
-            .is_none());
+        assert!(
+            storage
+                .get(&StorageKey::memory(&ctx(), id.as_str()))
+                .await
+                .unwrap()
+                .is_none()
+        );
         // .vec gone.
         assert!(storage.get(&vec_key(&ctx(), &id)).await.unwrap().is_none());
         // Vector index search no longer returns it.
@@ -1410,11 +1412,13 @@ mod tests {
         assert_eq!(stats.examined, 1);
         assert_eq!(stats.pruned, 1);
         assert_eq!(stats.skipped_user_immune, 0);
-        assert!(storage
-            .get(&StorageKey::memory(&ctx(), id.as_str()))
-            .await
-            .unwrap()
-            .is_none());
+        assert!(
+            storage
+                .get(&StorageKey::memory(&ctx(), id.as_str()))
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[tokio::test]
@@ -1454,11 +1458,13 @@ mod tests {
         assert_eq!(stats.pruned, 0, "user-immune memory must NOT be pruned");
         assert_eq!(stats.skipped_user_immune, 1, "skip MUST be counted");
         // .md still present.
-        assert!(storage
-            .get(&StorageKey::memory(&ctx(), id.as_str()))
-            .await
-            .unwrap()
-            .is_some());
+        assert!(
+            storage
+                .get(&StorageKey::memory(&ctx(), id.as_str()))
+                .await
+                .unwrap()
+                .is_some()
+        );
     }
 
     #[tokio::test]
@@ -1571,10 +1577,12 @@ mod tests {
             other => panic!("expected UserMemoryImmune, got {other:?}"),
         }
         // Memory still in storage.
-        assert!(get_by_id(&ctx(), storage.as_ref(), &id)
-            .await
-            .unwrap()
-            .is_some());
+        assert!(
+            get_by_id(&ctx(), storage.as_ref(), &id)
+                .await
+                .unwrap()
+                .is_some()
+        );
     }
 
     #[tokio::test]
@@ -1601,10 +1609,12 @@ mod tests {
         delete(&ctx(), storage.as_ref(), &vector_index, &id, true)
             .await
             .unwrap();
-        assert!(get_by_id(&ctx(), storage.as_ref(), &id)
-            .await
-            .unwrap()
-            .is_none());
+        assert!(
+            get_by_id(&ctx(), storage.as_ref(), &id)
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[tokio::test]
@@ -1628,10 +1638,12 @@ mod tests {
         delete(&ctx(), storage.as_ref(), &vector_index, &id, false)
             .await
             .unwrap();
-        assert!(get_by_id(&ctx(), storage.as_ref(), &id)
-            .await
-            .unwrap()
-            .is_none());
+        assert!(
+            get_by_id(&ctx(), storage.as_ref(), &id)
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[tokio::test]
@@ -1734,7 +1746,7 @@ mod tests {
         // Predecessor M1 is compressed into Mc. M1 is then force-
         // deleted. Chasing M1 should walk forward to Mc.
         use crate::engine::llm::{Generation, MockLlmClient};
-        use crate::engine::memory::{compress, CompressionConfig, CompressionWindow};
+        use crate::engine::memory::{CompressionConfig, CompressionWindow, compress};
         let (storage, _, vector_index, now) = fresh_setup().await;
         let emb1 = MockEmbedder::new(4).with_response(vec![unit_vec(4, 0)]);
         let m1 = MemoryId::new("mem-chase101");
@@ -1802,7 +1814,7 @@ mod tests {
         // M1's counter, simulate compression-then-delete, and verify
         // recompute correctly attributes to Mc.
         use crate::engine::llm::{Generation, MockLlmClient};
-        use crate::engine::memory::{compress, CompressionConfig, CompressionWindow};
+        use crate::engine::memory::{CompressionConfig, CompressionWindow, compress};
 
         let (storage, _, vector_index, now) = fresh_setup().await;
         let emb1 = MockEmbedder::new(4).with_response(vec![unit_vec(4, 0)]);

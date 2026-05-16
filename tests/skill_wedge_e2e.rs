@@ -29,11 +29,11 @@ use loop_engine::engine::context::Context;
 use loop_engine::engine::embedding::MockEmbedder;
 use loop_engine::engine::error::EngineError;
 use loop_engine::engine::memory::{
-    self, get_by_id as memory_get_by_id, insert as memory_insert, MemoryId,
+    self, MemoryId, get_by_id as memory_get_by_id, insert as memory_insert,
 };
 use loop_engine::engine::skills::{
-    archive as archive_skill, delete as delete_skill, get_by_id as get_skill_by_id,
-    insert as insert_skill, SkillFrontmatter,
+    SkillFrontmatter, archive as archive_skill, delete as delete_skill,
+    get_by_id as get_skill_by_id, insert as insert_skill,
 };
 use loop_engine::engine::storage::{MemoryStorage, Storage};
 use loop_engine::engine::vector::HnswVectorIndex;
@@ -202,10 +202,12 @@ async fn llm_authored_skill_does_not_confer_immunity() {
     memory::delete(&ctx(), storage.as_ref(), &vector_index, &m1, false)
         .await
         .unwrap();
-    assert!(memory_get_by_id(&ctx(), storage.as_ref(), &m1)
-        .await
-        .unwrap()
-        .is_none());
+    assert!(
+        memory_get_by_id(&ctx(), storage.as_ref(), &m1)
+            .await
+            .unwrap()
+            .is_none()
+    );
 }
 
 /// User-authored skill with NO memory citations — skill itself is

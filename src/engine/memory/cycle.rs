@@ -18,10 +18,10 @@ use std::collections::HashSet;
 
 use crate::engine::context::Context;
 use crate::engine::error::EngineError;
+use crate::engine::memory::Memory;
 use crate::engine::memory::compress::COMPRESSION_MAX_CHAIN_DEPTH;
 use crate::engine::memory::id::MemoryId;
 use crate::engine::memory::store::get_by_id;
-use crate::engine::memory::Memory;
 use crate::engine::storage::Storage;
 
 /// Detect cycles or depth-exceedance in the `derived_from` chains
@@ -133,7 +133,7 @@ mod tests {
     use super::*;
     use crate::engine::embedding::MockEmbedder;
     use crate::engine::memory::store::insert;
-    use crate::engine::memory::{compress as do_compress, CompressionConfig, CompressionWindow};
+    use crate::engine::memory::{CompressionConfig, CompressionWindow, compress as do_compress};
     use crate::engine::storage::MemoryStorage;
     use crate::engine::vector::HnswVectorIndex;
     use chrono::{DateTime, Utc};
@@ -175,9 +175,11 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert!(detect_cycle_in_window(&ctx(), storage.as_ref(), &[mem])
-            .await
-            .is_ok());
+        assert!(
+            detect_cycle_in_window(&ctx(), storage.as_ref(), &[mem])
+                .await
+                .is_ok()
+        );
     }
 
     /// Phase E2 audit C1 regression: diamond DAGs are NOT cycles.

@@ -54,7 +54,7 @@ use crate::engine::context::Context;
 use crate::engine::memory::MemoryId;
 use crate::engine::storage::{Storage, StorageKey};
 use crate::engine::vector::error::VectorIndexError;
-use crate::engine::vector::{sealed::Sealed, SearchHit, VectorIndex};
+use crate::engine::vector::{SearchHit, VectorIndex, sealed::Sealed};
 
 // Phase E D-E4 / D-E3 — tuning constants for the local HNSW. Defaults
 // tuned for the engine's "memory store" use case: insert-heavy at

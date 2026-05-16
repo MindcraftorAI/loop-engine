@@ -20,12 +20,12 @@ use tracing::warn;
 
 use crate::engine::context::Context;
 use crate::engine::error::EngineError;
+use crate::engine::memory::Memory;
 use crate::engine::memory::compress::COMPRESSION_MAX_CHAIN_DEPTH;
 use crate::engine::memory::id::MemoryId;
 use crate::engine::memory::store::{
-    get_by_id, parse_memory_file, render_memory_yaml, CITATION_CAS_MAX_RETRIES,
+    CITATION_CAS_MAX_RETRIES, get_by_id, parse_memory_file, render_memory_yaml,
 };
-use crate::engine::memory::Memory;
 use crate::engine::storage::{Storage, StorageKey};
 
 /// Phase E2 D-Cx6: forward-walk the `derived_from` chain from

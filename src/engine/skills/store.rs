@@ -67,15 +67,14 @@ pub async fn insert(
     // via `recompute_citation_counts` if they drift.
     if frontmatter.authored_by.is_immune() {
         for evr in &frontmatter.evidence_refs {
-            if let Some(mid) = evr.as_memory_id() {
-                if let Err(e) =
+            if let Some(mid) = evr.as_memory_id()
+                && let Err(e) =
                     crate::engine::memory::increment_citation_count(ctx, storage, mid).await
-                {
-                    warn!(
-                        skill = %id, memory = %mid, error = %e,
-                        "insert_skill: failed to increment memory citation counter"
-                    );
-                }
+            {
+                warn!(
+                    skill = %id, memory = %mid, error = %e,
+                    "insert_skill: failed to increment memory citation counter"
+                );
             }
         }
     }
@@ -192,12 +191,10 @@ pub async fn delete(
     force: bool,
 ) -> Result<(), EngineError> {
     let key = StorageKey::skill(ctx, id);
-    if !force {
-        if let Some(bytes) = storage.get(&key).await? {
-            let (fm, _body) = parse_skill_file(&bytes)?;
-            if fm.authored_by.is_immune() {
-                return Err(EngineError::UserSkillImmune { id: id.to_string() });
-            }
+    if !force && let Some(bytes) = storage.get(&key).await? {
+        let (fm, _body) = parse_skill_file(&bytes)?;
+        if fm.authored_by.is_immune() {
+            return Err(EngineError::UserSkillImmune { id: id.to_string() });
         }
     }
     storage.delete(&key).await?;
@@ -346,10 +343,12 @@ mod tests {
         let r = delete(&ctx(), storage.as_ref(), "skl-del00001", false).await;
         assert!(matches!(r, Err(EngineError::UserSkillImmune { .. })));
         // Skill still present.
-        assert!(get_by_id(&ctx(), storage.as_ref(), "skl-del00001")
-            .await
-            .unwrap()
-            .is_some());
+        assert!(
+            get_by_id(&ctx(), storage.as_ref(), "skl-del00001")
+                .await
+                .unwrap()
+                .is_some()
+        );
     }
 
     #[tokio::test]
@@ -363,10 +362,12 @@ mod tests {
         delete(&ctx(), storage.as_ref(), "skl-rmf00001", true)
             .await
             .unwrap();
-        assert!(get_by_id(&ctx(), storage.as_ref(), "skl-rmf00001")
-            .await
-            .unwrap()
-            .is_none());
+        assert!(
+            get_by_id(&ctx(), storage.as_ref(), "skl-rmf00001")
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[tokio::test]

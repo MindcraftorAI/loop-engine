@@ -15,7 +15,7 @@
 
 use std::path::PathBuf;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 
@@ -131,14 +131,14 @@ fn extract_text(content: Option<&Value>) -> Option<String> {
         let mut buf = String::new();
         let mut found = false;
         for item in arr {
-            if item.get("type").and_then(|t| t.as_str()) == Some("text") {
-                if let Some(s) = item.get("text").and_then(|t| t.as_str()) {
-                    if !buf.is_empty() {
-                        buf.push('\n');
-                    }
-                    buf.push_str(s);
-                    found = true;
+            if item.get("type").and_then(|t| t.as_str()) == Some("text")
+                && let Some(s) = item.get("text").and_then(|t| t.as_str())
+            {
+                if !buf.is_empty() {
+                    buf.push('\n');
                 }
+                buf.push_str(s);
+                found = true;
             }
         }
         if found {

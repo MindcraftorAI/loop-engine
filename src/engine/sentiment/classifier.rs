@@ -13,9 +13,9 @@
 #[cfg(any(test, feature = "test-fixtures"))]
 use std::collections::VecDeque;
 #[cfg(any(test, feature = "test-fixtures"))]
-use std::sync::atomic::{AtomicUsize, Ordering};
-#[cfg(any(test, feature = "test-fixtures"))]
 use std::sync::Mutex;
+#[cfg(any(test, feature = "test-fixtures"))]
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use async_trait::async_trait;
 use thiserror::Error;

@@ -12,7 +12,7 @@ use std::io;
 use std::path::Path;
 
 use anyhow::Result;
-use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 const DEFAULT_FILTER: &str = "loop_engine=info,warn";
 

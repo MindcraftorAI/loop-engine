@@ -29,7 +29,7 @@ use tracing::warn;
 use crate::engine::context::Context;
 use crate::engine::embedding::Embedder;
 use crate::engine::error::EngineError;
-use crate::engine::lessons::{check_promotion_gate, record_applied, GateDecision, PromotionConfig};
+use crate::engine::lessons::{GateDecision, PromotionConfig, check_promotion_gate, record_applied};
 use crate::engine::memory::{self, MemoryQuery, MemoryRef};
 use crate::engine::storage::{Storage, StorageKey};
 use crate::engine::vector::VectorIndex;
@@ -1203,8 +1203,8 @@ mod tests {
         use crate::engine::embedding::MockEmbedder;
         use crate::engine::memory;
         use crate::engine::vector::HnswVectorIndex;
-        use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
 
         let h = TestHarness::in_memory();
         let dim = 4;
@@ -1282,7 +1282,7 @@ mod tests {
 
     #[tokio::test]
     async fn assemble_populates_active_skills_from_session_state() {
-        use crate::engine::skills::{insert as insert_skill, SkillFrontmatter};
+        use crate::engine::skills::{SkillFrontmatter, insert as insert_skill};
 
         let h = TestHarness::in_memory();
         let fm = SkillFrontmatter::new("formatter", "auto-format on save");
@@ -1338,9 +1338,9 @@ mod tests {
 
     #[tokio::test]
     async fn assemble_populates_all_three_sections() {
-        use crate::engine::personas::{insert as insert_persona, PersonaFrontmatter};
-        use crate::engine::skills::{insert as insert_skill, SkillFrontmatter};
-        use crate::engine::teams::{insert as insert_team, TeamFrontmatter};
+        use crate::engine::personas::{PersonaFrontmatter, insert as insert_persona};
+        use crate::engine::skills::{SkillFrontmatter, insert as insert_skill};
+        use crate::engine::teams::{TeamFrontmatter, insert as insert_team};
 
         let h = TestHarness::in_memory();
         insert_skill(

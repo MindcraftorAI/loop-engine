@@ -15,7 +15,7 @@ mod runner;
 pub mod source;
 
 pub use cursor::{CursorAction, FileCursor};
-pub use events::{WatcherEvent, PARSE_ERROR_REPORT_EVERY};
-pub use parser::{parse_line, ParseOutcome, SkipReason};
-pub use runner::{spawn_watcher, WatcherHandle};
+pub use events::{PARSE_ERROR_REPORT_EVERY, WatcherEvent};
+pub use parser::{ParseOutcome, SkipReason, parse_line};
+pub use runner::{WatcherHandle, spawn_watcher};
 pub use source::JsonlWatcherSource;
