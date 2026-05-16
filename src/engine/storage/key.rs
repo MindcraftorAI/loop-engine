@@ -49,6 +49,33 @@ impl StorageKey {
         Self(prefixed(ctx, &suffix))
     }
 
+    /// Per-(session, task, phase) workflow ledger entry. One file per
+    /// phase; create-only writes (mirrors `sentiment_signal`). Used by
+    /// the phase_ledger module — see its docs for the schema.
+    ///
+    /// Callers MUST pre-validate `session_id`, `task_id`, `phase`
+    /// against `[A-Za-z0-9_-]` before reaching here (the `phase_ledger`
+    /// module enforces this; this constructor doesn't re-check).
+    pub fn phase_log(ctx: &Context, session_id: &str, task_id: &str, phase: &str) -> Self {
+        let suffix = format!("phase_ledger/{session_id}/{task_id}/{phase}.yaml");
+        Self(prefixed(ctx, &suffix))
+    }
+
+    /// Prefix key for listing every phase logged for one `(session,
+    /// task)` pair. Backend's `list()` returns the per-phase file keys
+    /// under this prefix.
+    ///
+    /// **Trailing slash is load-bearing.** `MemoryStorage::list` uses
+    /// `starts_with` for prefix matching; without the slash, a query
+    /// for `task_id="t1"` would silently include entries from sibling
+    /// `task_id="t1-extra"`. `LocalFsStorage::list` uses `read_dir` so
+    /// isn't affected — but the cross-backend divergence would only
+    /// surface in production. Trailing slash makes both backends match.
+    pub fn phase_ledger_task_prefix(ctx: &Context, session_id: &str, task_id: &str) -> Self {
+        let suffix = format!("phase_ledger/{session_id}/{task_id}/");
+        Self(prefixed(ctx, &suffix))
+    }
+
     /// Memory file (Phase E). Single-user: `memories/<id>.md`;
     /// multi-tenant: `tenants/.../memories/<id>.md`. Mirrors lesson
     /// layout but flat — memories don't have a status hierarchy.

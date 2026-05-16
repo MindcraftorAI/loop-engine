@@ -32,7 +32,10 @@ jobs:
 
   # Compile-only Windows check. Catches Unix-only deps / libc calls at
   # PR time so the release.yml matrix doesn't surprise us at tag time.
-  # No tests (the daemon-control test paths are Unix-only by design).
+  # Scopes to `--lib --bin loop-engine` because that's what release.yml
+  # actually ships — integration tests under `tests/` use Unix-only
+  # tokio + filesystem features by design and don't (and shouldn't)
+  # compile for Windows.
   windows-check:
     name: windows compile check
     runs-on: windows-latest
@@ -45,7 +48,7 @@ jobs:
         with:
           key: windows-msvc
       - name: cargo check --target x86_64-pc-windows-msvc
-        run: cargo check --target x86_64-pc-windows-msvc --all-targets
+        run: cargo check --target x86_64-pc-windows-msvc --lib --bin loop-engine
 
   # The public-api stability gate was removed 2026-05-16 as part of the
   # 1.4.0 → 0.4.0 version reset. Per SemVer.org §4 ("Major version zero

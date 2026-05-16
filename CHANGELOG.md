@@ -13,6 +13,65 @@ external consumer.
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-05-16
+
+**Phase ledger + Windows-supported binary.**
+
+### Added
+
+- `engine::phase_ledger` module — per-`(session, task, phase)`
+  workflow ledger. Records which workflow phases (`pre_research`,
+  `learn`, `code`, `test`, `audit`, `post_research`, `fix`) have been
+  logged for a given task. Consumers use this to gate downstream
+  operations on phase coverage (e.g. block `git commit` if `audit`
+  hasn't been logged for the active task).
+  - Storage layout: `phase_ledger/<session>/<task>/<phase>.yaml`
+    (one file per phase entry, idempotent re-log via create-only
+    `put_if_version`). Mirrors the per-session signal store pattern.
+  - Substrate-pure: engine has no `Task` type. `task_id` is an opaque
+    string discriminator from the caller.
+  - Input validation: `session_id`, `task_id` validated against
+    `[A-Za-z0-9_-]{1,128}` BEFORE constructing storage keys
+    (defense-in-depth; the `StorageKey::from_raw` hard-assert never
+    fires from valid RPC). `note` capped at 16 KB.
+- `task.log_phase` RPC — `{session_id, task_id, phase, note?}` →
+  `{ok, newly_recorded, ...}`. `newly_recorded: false` on idempotent
+  re-log.
+- `task.get_ledger` RPC — `{session_id, task_id}` → `{phases_logged,
+  entries}`. Returns entries sorted by `logged_at` (deterministic
+  chronological order regardless of storage backend).
+- `StorageKey::phase_log` + `StorageKey::phase_ledger_task_prefix`
+  key constructors. Trailing slash on the prefix is load-bearing
+  (without it, MemoryStorage's `starts_with` prefix match would
+  collide with sibling `task_id`s; LocalFs is unaffected but
+  cross-backend divergence is a bug regardless).
+
+### Audit-driven fixes (caught pre-commit)
+
+- HIGH: prefix-list collision between sibling `task_id`s in
+  MemoryStorage. Fixed via trailing slash + dedicated isolation test.
+- MED: `get_ledger` ordering was backend-dependent. Now sorts by
+  `logged_at` server-side.
+- MED: `note` length DoS vector. Capped at 16 KB with `InvalidParams`
+  rejection.
+
+### Coverage
+
+- 9 `phase_ledger` module unit tests (phase round-trip, validate_id
+  boundaries, YAML render/parse round-trip including escape chars).
+- 10 `serve.rs` RPC handler tests (record + readback, idempotent
+  re-log, unknown phase, path traversal, sibling isolation, cross-
+  session isolation, sort-by-logged_at, oversized note rejection).
+- Full suite: 587 tests passing (584 prior + 3 phase ledger module
+  net adds beyond the unit tests above).
+
+### CI
+
+- `windows-check` job scope narrowed from `--all-targets` to
+  `--lib --bin loop-engine`. Integration tests under `tests/` use
+  Unix-only tokio + filesystem features by design; the release.yml
+  matrix only ships the lib + bin, so that's what we verify.
+
 ## [0.4.0] — 2026-05-16
 
 **Version reset: 1.x → 0.4.0.**

@@ -47,6 +47,7 @@ use crate::engine::memory::{
     search as memory_search, text_search as memory_text_search, update as memory_update,
 };
 use crate::engine::paths;
+use crate::engine::phase_ledger::{self, LedgerError, Phase};
 use crate::engine::scoring::score_text_match;
 use crate::engine::storage::filesystem::LocalFsStorage;
 use crate::engine::storage::{Storage, StorageKey};
@@ -304,6 +305,8 @@ async fn dispatch(
         }
         "memory.update" => memory_update_method(params, ctx, storage, embedder, vector_index).await,
         "memory.delete" => memory_delete_method(params, ctx, storage, vector_index).await,
+        "task.log_phase" => task_log_phase(params, ctx, storage).await,
+        "task.get_ledger" => task_get_ledger(params, ctx, storage).await,
         _ => Err(DispatchError::MethodNotFound),
     }
 }
@@ -1592,6 +1595,109 @@ fn preview(body: &str, max: usize) -> String {
     out
 }
 
+// ---------------------------------------------------------------------
+// Phase ledger handlers (v0.5)
+//
+// The engine stores per-(session, task, phase) entries. Consumers use
+// the ledger to gate downstream operations on workflow phase coverage
+// — e.g. "block `git commit` if audit + post_research haven't been
+// logged for the active task." The engine itself doesn't know what
+// "active task" means; consumers supply task_id as an opaque string.
+// ---------------------------------------------------------------------
+
+#[derive(Deserialize)]
+struct TaskLogPhaseParams {
+    session_id: String,
+    task_id: String,
+    /// Snake-case phase identifier — must match one of the seven values
+    /// `Phase` recognizes (`pre_research`, `learn`, `code`, `test`,
+    /// `audit`, `post_research`, `fix`). Stringly-typed at the wire so
+    /// older callers with extra phases don't break compile; rejected
+    /// at parse with `InvalidParams`.
+    phase: String,
+    #[serde(default)]
+    note: Option<String>,
+}
+
+async fn task_log_phase(
+    params: Value,
+    ctx: &Context,
+    storage: &dyn Storage,
+) -> std::result::Result<Value, DispatchError> {
+    let p: TaskLogPhaseParams =
+        serde_json::from_value(params).map_err(|e| DispatchError::InvalidParams(e.to_string()))?;
+    let phase = Phase::parse(&p.phase).ok_or_else(|| {
+        DispatchError::InvalidParams(format!(
+            "unknown phase {:?} — expected one of pre_research, learn, code, test, audit, post_research, fix",
+            p.phase
+        ))
+    })?;
+    let written = phase_ledger::log_phase(
+        ctx,
+        storage,
+        &p.session_id,
+        &p.task_id,
+        phase,
+        p.note.as_deref(),
+    )
+    .await
+    .map_err(ledger_to_dispatch)?;
+    Ok(json!({
+        "ok": true,
+        "session_id": p.session_id,
+        "task_id": p.task_id,
+        "phase": phase.as_str(),
+        // false on idempotent re-log (entry already existed) so callers
+        // can distinguish "first time" from "noop".
+        "newly_recorded": written,
+    }))
+}
+
+#[derive(Deserialize)]
+struct TaskGetLedgerParams {
+    session_id: String,
+    task_id: String,
+}
+
+async fn task_get_ledger(
+    params: Value,
+    ctx: &Context,
+    storage: &dyn Storage,
+) -> std::result::Result<Value, DispatchError> {
+    let p: TaskGetLedgerParams =
+        serde_json::from_value(params).map_err(|e| DispatchError::InvalidParams(e.to_string()))?;
+    let entries = phase_ledger::get_ledger(ctx, storage, &p.session_id, &p.task_id)
+        .await
+        .map_err(ledger_to_dispatch)?;
+    let phases: Vec<&'static str> = entries.iter().map(|e| e.phase.as_str()).collect();
+    let entry_json: Vec<Value> = entries
+        .iter()
+        .map(|e| {
+            json!({
+                "phase": e.phase.as_str(),
+                "logged_at": e.logged_at,
+                "note": e.note,
+            })
+        })
+        .collect();
+    Ok(json!({
+        "session_id": p.session_id,
+        "task_id": p.task_id,
+        "phases_logged": phases,
+        "entries": entry_json,
+    }))
+}
+
+fn ledger_to_dispatch(err: LedgerError) -> DispatchError {
+    match err {
+        LedgerError::InvalidId { .. } | LedgerError::NoteTooLong { .. } => {
+            DispatchError::InvalidParams(err.to_string())
+        }
+        LedgerError::Storage(e) => DispatchError::Other(anyhow!(e)),
+        LedgerError::MalformedEntry { .. } => DispatchError::Other(anyhow!(err.to_string())),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1680,5 +1786,290 @@ mod tests {
                 Self::Other(e) => write!(f, "Other({e:#})"),
             }
         }
+    }
+
+    // ---------------------------------------------------------------------
+    // Phase ledger RPC handler tests
+    //
+    // Exercises the round-trip through the wire layer: serde_json::Value
+    // params in, JSON Value response out. Storage is in-memory (no
+    // tmpdir / no daemon spawn). Covers happy-path log + readback,
+    // unknown phase, invalid id rejection, and idempotent re-log.
+    // ---------------------------------------------------------------------
+
+    use crate::engine::storage::MemoryStorage;
+
+    fn test_ctx_and_storage() -> (Context, MemoryStorage) {
+        (Context::single_user_local(), MemoryStorage::default())
+    }
+
+    #[tokio::test]
+    async fn task_log_phase_records_and_reads_back() {
+        let (ctx, storage) = test_ctx_and_storage();
+        let params = json!({
+            "session_id": "session-abc",
+            "task_id": "task-127",
+            "phase": "audit",
+            "note": "13 retroactive findings",
+        });
+        let resp = task_log_phase(params, &ctx, &storage).await.unwrap();
+        assert_eq!(resp["ok"], json!(true));
+        assert_eq!(resp["newly_recorded"], json!(true));
+        assert_eq!(resp["phase"], json!("audit"));
+
+        let ledger = task_get_ledger(
+            json!({"session_id": "session-abc", "task_id": "task-127"}),
+            &ctx,
+            &storage,
+        )
+        .await
+        .unwrap();
+        let phases = ledger["phases_logged"].as_array().unwrap();
+        assert_eq!(phases.len(), 1);
+        assert_eq!(phases[0], json!("audit"));
+        let entries = ledger["entries"].as_array().unwrap();
+        assert_eq!(entries[0]["note"], json!("13 retroactive findings"));
+    }
+
+    #[tokio::test]
+    async fn task_log_phase_idempotent_relog() {
+        let (ctx, storage) = test_ctx_and_storage();
+        let params = json!({
+            "session_id": "session-abc",
+            "task_id": "task-127",
+            "phase": "code",
+        });
+        let first = task_log_phase(params.clone(), &ctx, &storage)
+            .await
+            .unwrap();
+        assert_eq!(first["newly_recorded"], json!(true));
+
+        // Re-logging the same phase is a noop: returns ok with
+        // newly_recorded=false, original entry preserved.
+        let second = task_log_phase(params, &ctx, &storage).await.unwrap();
+        assert_eq!(second["ok"], json!(true));
+        assert_eq!(second["newly_recorded"], json!(false));
+
+        let ledger = task_get_ledger(
+            json!({"session_id": "session-abc", "task_id": "task-127"}),
+            &ctx,
+            &storage,
+        )
+        .await
+        .unwrap();
+        assert_eq!(ledger["phases_logged"].as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn task_log_phase_rejects_unknown_phase() {
+        let (ctx, storage) = test_ctx_and_storage();
+        let err = task_log_phase(
+            json!({
+                "session_id": "s1",
+                "task_id": "t1",
+                "phase": "review",
+            }),
+            &ctx,
+            &storage,
+        )
+        .await
+        .expect_err("unknown phase must fail");
+        assert!(matches!(err, DispatchError::InvalidParams(_)));
+    }
+
+    #[tokio::test]
+    async fn task_log_phase_rejects_path_traversal_in_task_id() {
+        let (ctx, storage) = test_ctx_and_storage();
+        let err = task_log_phase(
+            json!({
+                "session_id": "s1",
+                "task_id": "../etc/passwd",
+                "phase": "audit",
+            }),
+            &ctx,
+            &storage,
+        )
+        .await
+        .expect_err("dotdot must fail");
+        assert!(matches!(err, DispatchError::InvalidParams(_)));
+    }
+
+    #[tokio::test]
+    async fn task_get_ledger_empty_for_unknown_task() {
+        let (ctx, storage) = test_ctx_and_storage();
+        let ledger = task_get_ledger(
+            json!({"session_id": "s1", "task_id": "never-logged"}),
+            &ctx,
+            &storage,
+        )
+        .await
+        .unwrap();
+        assert_eq!(ledger["phases_logged"].as_array().unwrap().len(), 0);
+        assert_eq!(ledger["entries"].as_array().unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn task_log_phase_multiple_phases_distinct_files() {
+        let (ctx, storage) = test_ctx_and_storage();
+        for phase in [
+            "pre_research",
+            "learn",
+            "code",
+            "test",
+            "audit",
+            "post_research",
+            "fix",
+        ] {
+            task_log_phase(
+                json!({
+                    "session_id": "s1",
+                    "task_id": "t1",
+                    "phase": phase,
+                }),
+                &ctx,
+                &storage,
+            )
+            .await
+            .unwrap();
+        }
+        let ledger = task_get_ledger(json!({"session_id": "s1", "task_id": "t1"}), &ctx, &storage)
+            .await
+            .unwrap();
+        assert_eq!(ledger["phases_logged"].as_array().unwrap().len(), 7);
+    }
+
+    // Audit HIGH fix: prefix-list collision between sibling task_ids
+    // in MemoryStorage (which uses `starts_with`). Without the trailing
+    // slash in `phase_ledger_task_prefix`, a query for "t1" would
+    // silently include entries from "t1-extra". This test would have
+    // caught the bug pre-commit.
+    #[tokio::test]
+    async fn task_get_ledger_isolates_sibling_task_ids() {
+        let (ctx, storage) = test_ctx_and_storage();
+        task_log_phase(
+            json!({"session_id": "s1", "task_id": "t1", "phase": "audit"}),
+            &ctx,
+            &storage,
+        )
+        .await
+        .unwrap();
+        task_log_phase(
+            json!({"session_id": "s1", "task_id": "t1-extra", "phase": "code"}),
+            &ctx,
+            &storage,
+        )
+        .await
+        .unwrap();
+        let ledger = task_get_ledger(json!({"session_id": "s1", "task_id": "t1"}), &ctx, &storage)
+            .await
+            .unwrap();
+        let phases = ledger["phases_logged"].as_array().unwrap();
+        assert_eq!(phases.len(), 1);
+        assert_eq!(phases[0], json!("audit"));
+    }
+
+    // Two sessions logging the same task_id must not collide.
+    #[tokio::test]
+    async fn task_get_ledger_isolates_sessions() {
+        let (ctx, storage) = test_ctx_and_storage();
+        task_log_phase(
+            json!({"session_id": "s1", "task_id": "shared", "phase": "audit"}),
+            &ctx,
+            &storage,
+        )
+        .await
+        .unwrap();
+        task_log_phase(
+            json!({"session_id": "s2", "task_id": "shared", "phase": "code"}),
+            &ctx,
+            &storage,
+        )
+        .await
+        .unwrap();
+        let s1 = task_get_ledger(
+            json!({"session_id": "s1", "task_id": "shared"}),
+            &ctx,
+            &storage,
+        )
+        .await
+        .unwrap();
+        let s2 = task_get_ledger(
+            json!({"session_id": "s2", "task_id": "shared"}),
+            &ctx,
+            &storage,
+        )
+        .await
+        .unwrap();
+        let s1_phases: Vec<&str> = s1["phases_logged"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        let s2_phases: Vec<&str> = s2["phases_logged"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert_eq!(s1_phases, vec!["audit"]);
+        assert_eq!(s2_phases, vec!["code"]);
+    }
+
+    // Audit MED fix: get_ledger must sort by logged_at (deterministic
+    // chronological order regardless of backend incidental ordering).
+    #[tokio::test]
+    async fn task_get_ledger_sorts_by_logged_at() {
+        let (ctx, storage) = test_ctx_and_storage();
+        let log_order = [
+            "pre_research",
+            "code",
+            "audit",
+            "fix",
+            "learn",
+            "post_research",
+            "test",
+        ];
+        for phase in log_order {
+            task_log_phase(
+                json!({"session_id": "s1", "task_id": "t1", "phase": phase}),
+                &ctx,
+                &storage,
+            )
+            .await
+            .unwrap();
+            // Sleep 2ms so timestamps differentiate (RFC3339 ms precision).
+            tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+        }
+        let ledger = task_get_ledger(json!({"session_id": "s1", "task_id": "t1"}), &ctx, &storage)
+            .await
+            .unwrap();
+        let phases: Vec<&str> = ledger["phases_logged"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert_eq!(phases, log_order.to_vec());
+    }
+
+    // Audit MED fix: note length capped (prevent unbounded growth).
+    #[tokio::test]
+    async fn task_log_phase_rejects_oversized_note() {
+        let (ctx, storage) = test_ctx_and_storage();
+        let huge = "a".repeat(16 * 1024 + 1);
+        let err = task_log_phase(
+            json!({
+                "session_id": "s1",
+                "task_id": "t1",
+                "phase": "audit",
+                "note": huge,
+            }),
+            &ctx,
+            &storage,
+        )
+        .await
+        .expect_err("oversized note must fail");
+        assert!(matches!(err, DispatchError::InvalidParams(_)));
     }
 }

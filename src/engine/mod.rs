@@ -22,6 +22,7 @@ pub mod manifest;
 pub mod memory;
 pub mod paths;
 pub mod personas;
+pub mod phase_ledger;
 pub mod pid;
 pub mod scoring;
 pub mod sentiment;
