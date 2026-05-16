@@ -99,9 +99,14 @@ jobs:
           STAGE="loop-engine-${{ github.ref_name }}-${{ matrix.target }}"
           mkdir -p "dist/$STAGE"
           cp "target/${{ matrix.target }}/release/loop-engine" "dist/$STAGE/loop-engine"
+          chmod +x "dist/$STAGE/loop-engine"
           cp README.md LICENSE THIRD_PARTY_LICENSES.md "dist/$STAGE/" 2>/dev/null || true
           tar -czf "dist/$STAGE.tar.gz" -C dist "$STAGE"
-          shasum -a 256 "dist/$STAGE.tar.gz" > "dist/$STAGE.tar.gz.sha256"
+          # Generate sha256 sidecar from inside dist/ so the embedded path
+          # is bare ("$STAGE.tar.gz" not "dist/$STAGE.tar.gz") — lets
+          # downstream `shasum -c` work from the dist dir without manual
+          # path rewriting. v0.6c audit fix (M4).
+          ( cd dist && shasum -a 256 "$STAGE.tar.gz" > "$STAGE.tar.gz.sha256" )
 
       - name: package binary (windows zip)
         if: matrix.archive == 'zip'

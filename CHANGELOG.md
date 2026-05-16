@@ -9,6 +9,25 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ## [Unreleased]
 
+## [1.4.0] — 2026-05-16
+
+Version-bump catch-up. The v1.1 / v1.2 / v1.3 / v1.4 commits between
+2026-05-13 and 2026-05-16 (`69fa253` through `3ba7e41`) shipped their
+features but left `Cargo.toml` at `1.1.0`. This release stamps the
+crate version to match the actual feature surface in `main`.
+
+Also includes the `ci(release)` cross-target build matrix workflow
+(`c9e5b0d`) so this is the first version that can produce
+distribution binaries via the GitHub Actions matrix:
+`{x86_64,aarch64}-apple-darwin`, `{x86_64,aarch64}-unknown-linux-gnu`,
+`{x86_64,aarch64}-pc-windows-msvc`.
+
+Workflow fix: tar.gz packaging step now runs `chmod +x` before
+archiving (so the executable bit survives the tarball roundtrip) and
+generates the sha256 sidecar from inside `dist/` (so the embedded
+path is bare `<file>.tar.gz`, not `dist/<file>.tar.gz` — lets
+`shasum -c` work cleanly from the dist dir).
+
 ### Added — v1.1 Pack-authored lesson seeding
 
 - **`Authorship::Pack` variant** — new non-exhaustive enum variant for
