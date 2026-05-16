@@ -302,6 +302,9 @@ async fn dispatch(
         "memory.search" => memory_search_method(params, ctx, storage, embedder, vector_index).await,
         "memory.get" => memory_get(params, ctx, storage).await,
         "memory.list" => memory_list(params, ctx, storage).await,
+        "manifest.assemble" => {
+            manifest_assemble(params, ctx, storage, embedder, vector_index).await
+        }
         "memory.update" => memory_update_method(params, ctx, storage, embedder, vector_index).await,
         "memory.delete" => memory_delete_method(params, ctx, storage, vector_index).await,
         _ => Err(DispatchError::MethodNotFound),
@@ -1352,6 +1355,224 @@ async fn memory_delete_method(
             Err(DispatchError::UserMemoryImmune { id, cited_by })
         }
         Err(e) => Err(DispatchError::Other(anyhow!("memory.delete failed: {e}"))),
+    }
+}
+
+// ---- v1.4: manifest.assemble ---------------------------------------
+
+#[derive(Deserialize)]
+struct ManifestAssembleParams {
+    /// Statuses to include. Default ["active"] (TS parity).
+    #[serde(default)]
+    statuses: Option<Vec<String>>,
+    /// Max lessons to return. Default 5.
+    #[serde(default)]
+    lesson_limit: Option<usize>,
+    /// Body preview char count. Default 200.
+    #[serde(default)]
+    body_preview_len: Option<usize>,
+    /// Run the wedge gate per lesson + attach `gate` field. Default true.
+    #[serde(default = "default_annotate_with_gate")]
+    annotate_with_gate: bool,
+    /// Bump `applied_count` + `last_applied_at` per surfaced lesson.
+    /// Default true (TS parity). Set false for strictly read-only callers.
+    #[serde(default = "default_record_applied")]
+    record_applied: bool,
+    /// Text memory query. When present + embedder is reachable, populates
+    /// the `memories` section. Defaults to no memory search.
+    #[serde(default)]
+    memory_query: Option<String>,
+    /// Max memories to return when `memory_query` populated. Default 5.
+    #[serde(default)]
+    memory_limit: Option<usize>,
+    /// Optional scope filter on the memory section. Same wire shape as
+    /// `memory.search`.
+    #[serde(default)]
+    memory_scope_filter: Option<ScopeFilterWire>,
+}
+
+fn default_annotate_with_gate() -> bool {
+    true
+}
+fn default_record_applied() -> bool {
+    true
+}
+
+/// `manifest.assemble` — central RAG-style assembly. Returns the agent's
+/// "system context payload": active lessons (deterministic-sorted, gate-
+/// annotated, applied_count bumped) + an optional memory recall for the
+/// current task. This is what a host like Hermes calls to get "what
+/// rules apply right now" in one shot, instead of stitching together
+/// `lesson.list` + `memory.search`.
+///
+/// Skill / persona / team active sections ship as empty arrays in v1.4
+/// — the SessionState plumbing for activation IDs is deferred to a
+/// later release (Route A from the v0.5c pre-research). Out-of-scope
+/// fields stay forward-compatible: callers wildcard-match.
+async fn manifest_assemble(
+    params: Value,
+    ctx: &Context,
+    storage: &dyn Storage,
+    embedder: &dyn Embedder,
+    vector_index: &dyn VectorIndex,
+) -> std::result::Result<Value, DispatchError> {
+    use crate::engine::manifest::{assemble, AssembleConfig};
+    use crate::engine::memory::MemoryQuery as EngineMemoryQuery;
+    use crate::engine::yaml::LessonStatus as EngineLessonStatus;
+
+    let p: ManifestAssembleParams =
+        serde_json::from_value(params).map_err(|e| DispatchError::InvalidParams(e.to_string()))?;
+
+    let statuses = match p.statuses {
+        Some(v) if !v.is_empty() => {
+            let mut out = Vec::with_capacity(v.len());
+            for s in v {
+                let parsed = match s.as_str() {
+                    "pending" => EngineLessonStatus::Pending,
+                    "active" => EngineLessonStatus::Active,
+                    "promoted" => EngineLessonStatus::Promoted,
+                    "discarded" => EngineLessonStatus::Discarded,
+                    "superseded" => EngineLessonStatus::Superseded,
+                    other => {
+                        return Err(DispatchError::InvalidParams(format!(
+                            "unknown lesson status '{other}'"
+                        )));
+                    }
+                };
+                out.push(parsed);
+            }
+            out
+        }
+        _ => vec![EngineLessonStatus::Active],
+    };
+
+    let scope_filter = match p.memory_scope_filter {
+        Some(w) => Some(w.into_engine()?),
+        None => None,
+    };
+
+    let memory_query = p.memory_query.and_then(|q| {
+        let trimmed = q.trim().to_string();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(EngineMemoryQuery::Text(trimmed))
+        }
+    });
+
+    let defaults = AssembleConfig::default();
+    let config = AssembleConfig {
+        statuses,
+        lesson_limit: p.lesson_limit.unwrap_or(defaults.lesson_limit),
+        body_preview_len: p.body_preview_len.unwrap_or(defaults.body_preview_len),
+        annotate_with_gate: p.annotate_with_gate,
+        record_applied: p.record_applied,
+        promotion_config: defaults.promotion_config,
+        memory_query,
+        memory_limit: p.memory_limit.unwrap_or(defaults.memory_limit),
+        memory_scope_filter: scope_filter,
+    };
+
+    let manifest = assemble(
+        ctx,
+        storage,
+        Some(embedder),
+        Some(vector_index),
+        None, // SessionState — deferred to a later release
+        &config,
+        Utc::now(),
+    )
+    .await
+    .map_err(|e| DispatchError::Other(anyhow!("manifest.assemble failed: {e}")))?;
+
+    Ok(serialize_manifest(&manifest))
+}
+
+/// Hand-serialize the manifest because the engine's `Manifest` family
+/// is intentionally NOT serde-derived (every counter would become a
+/// SemVer hinge). Wire-shape decisions live here and are reviewable.
+fn serialize_manifest(m: &crate::engine::manifest::Manifest) -> Value {
+    let active_lessons: Vec<Value> = m
+        .active_lessons
+        .iter()
+        .map(|l| {
+            let mut obj = serde_json::Map::new();
+            obj.insert("id".into(), Value::String(l.id.clone()));
+            obj.insert("description".into(), Value::String(l.description.clone()));
+            obj.insert(
+                "status".into(),
+                Value::String(l.status.as_str().to_string()),
+            );
+            obj.insert("body_preview".into(), Value::String(l.body_preview.clone()));
+            obj.insert("applied_count".into(), json!(l.applied_count));
+            obj.insert(
+                "last_applied_at".into(),
+                l.last_applied_at
+                    .map(|t| Value::String(t.to_rfc3339()))
+                    .unwrap_or(Value::Null),
+            );
+            obj.insert(
+                "target_skill".into(),
+                l.target_skill
+                    .clone()
+                    .map(Value::String)
+                    .unwrap_or(Value::Null),
+            );
+            if let Some(gate) = &l.gate {
+                obj.insert("gate".into(), serialize_gate_decision(gate));
+            }
+            Value::Object(obj)
+        })
+        .collect();
+
+    let memories: Vec<Value> = m
+        .memories
+        .iter()
+        .map(|mref| {
+            json!({
+                "id": mref.id.as_str(),
+                "description": mref.description,
+                "body_preview": mref.body_preview,
+                "similarity": (mref.similarity * 1000.0).round() / 1000.0,
+            })
+        })
+        .collect();
+
+    json!({
+        "active_lessons": active_lessons,
+        "memories": memories,
+        "active_skills": [],
+        "active_personas": [],
+        "active_teams": [],
+        "assembly_stats": {
+            "assembled_at": m.assembly_stats.assembled_at.to_rfc3339(),
+            "total_listed": m.assembly_stats.total_listed,
+            "skipped_count": m.assembly_stats.skipped_count,
+            "gate_skip_count": m.assembly_stats.gate_skip_count,
+            "record_applied_failures": m.assembly_stats.record_applied_failures,
+            "memories_returned": m.assembly_stats.memories_returned,
+            "memory_search_failures": m.assembly_stats.memory_search_failures,
+            "session_section_skips": m.assembly_stats.session_section_skips,
+        },
+    })
+}
+
+/// Render a [`GateDecision`] as `{kind, reason_count}`. Non-exhaustive
+/// enum from the engine — full per-reason serialization is deferred to
+/// a follow-up release; the summary tag is enough for callers to render
+/// "wedge passed N checks" / "wedge blocked on N reasons" without us
+/// committing to a per-variant wire shape today.
+fn serialize_gate_decision(g: &crate::engine::lessons::gate::GateDecision) -> Value {
+    use crate::engine::lessons::gate::GateDecision;
+    match g {
+        GateDecision::Promote { reasons } => json!({
+            "kind": "promote",
+            "reason_count": reasons.len(),
+        }),
+        GateDecision::Block { reasons } => json!({
+            "kind": "block",
+            "reason_count": reasons.len(),
+        }),
     }
 }
 
