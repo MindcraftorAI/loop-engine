@@ -39,6 +39,11 @@ pub fn pid_is_alive(_pid: u32) -> bool {
 mod tests {
     use super::pid_is_alive;
 
+    // Unix-only: the Unix impl returns true for any reachable PID, so
+    // the current process is always alive. On Windows the stub always
+    // returns false (daemon-mode commands are unreachable there anyway),
+    // so this assertion would invert.
+    #[cfg(unix)]
     #[test]
     fn current_process_is_alive() {
         let pid = std::process::id();

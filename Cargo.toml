@@ -39,9 +39,6 @@ thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
 
-# Daemonization (fork + setsid + PID file)
-daemonize = "0.5"
-
 # Serialization
 serde = { version = "1", features = ["derive"] }
 # serde_yml is the actively-maintained fork of the archived serde_yaml. Used
@@ -55,8 +52,10 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "serd
 # Paths
 dirs = "6"
 
-# Unix primitives (PID probing, signals)
-libc = "0.2"
+# Unix primitives (PID probing, signals). Used only in Unix-only code
+# paths (daemon detach/stop, pid_is_alive); the target-specific dep
+# block below keeps it off Windows entirely, and the call sites are
+# cfg-gated to match. Windows binary doesn't ship the libc surface.
 
 # Advisory cross-process file lock (flock on Unix, LockFile on Windows).
 # Used to coordinate lesson-file writes with the TS MCP server. MIT/Apache.
@@ -130,6 +129,17 @@ parking_lot = "0.12"
 # dev-dependency only; promoted to a runtime dep for the HNSW
 # bridge. MIT OR Apache-2.0.
 tempfile = "3"
+
+# Unix-only deps. `daemonize` is fork+setsid — has no Windows target at
+# all. `libc` is technically cross-platform but the only sites that use
+# it (pid::pid_is_alive via `libc::kill(pid, 0)`, main::stop via
+# `libc::kill(pid, SIGTERM)`) are Unix daemon-control primitives that
+# don't translate to Windows. Windows binary ships with these sites
+# cfg-gated to return an actionable "use `serve` or `run --foreground`"
+# error — see src/main.rs and src/engine/pid.rs.
+[target.'cfg(unix)'.dependencies]
+daemonize = "0.5"
+libc = "0.2"
 
 [features]
 # Test fixtures: ships `MockSentimentClassifier` for cross-crate test

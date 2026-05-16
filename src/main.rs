@@ -1,17 +1,28 @@
 //! `loop-engine` binary entry.
 
-use std::fs;
 use std::process::ExitCode;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::Parser;
-use tracing::{error, info};
+use tracing::info;
+
+#[cfg(unix)]
+use anyhow::Context;
+#[cfg(unix)]
+use std::fs;
+#[cfg(unix)]
+use tracing::error;
 
 use loop_engine::cli::{Cli, Command};
 use loop_engine::config;
-use loop_engine::lifecycle::{self, pre_detach_checks, read_pid_file, run_body};
+#[cfg(unix)]
+use loop_engine::lifecycle;
+#[cfg(unix)]
+use loop_engine::lifecycle::read_pid_file;
+use loop_engine::lifecycle::{pre_detach_checks, run_body};
 use loop_engine::observability;
 use loop_engine::paths;
+#[cfg(unix)]
 use loop_engine::pid::pid_is_alive;
 
 fn main() -> ExitCode {
@@ -65,6 +76,7 @@ fn run_foreground() -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
+#[cfg(unix)]
 fn run_detached() -> Result<ExitCode> {
     // All filesystem prep must happen BEFORE fork — the child loses
     // useful error visibility.
@@ -104,6 +116,16 @@ fn run_detached() -> Result<ExitCode> {
     }
 }
 
+#[cfg(not(unix))]
+fn run_detached() -> Result<ExitCode> {
+    anyhow::bail!(
+        "loop-engine: detached daemon mode is not supported on Windows. \
+         Use `loop-engine run --foreground` to run inline, or \
+         `loop-engine serve` to run as an MCP stdio subprocess."
+    )
+}
+
+#[cfg(unix)]
 fn status() -> Result<ExitCode> {
     observability::init_foreground()?;
     let pid_path = paths::daemon_pid_path()?;
@@ -130,6 +152,15 @@ fn status() -> Result<ExitCode> {
     }
 }
 
+#[cfg(not(unix))]
+fn status() -> Result<ExitCode> {
+    anyhow::bail!(
+        "loop-engine: status command is not supported on Windows (daemon mode is Unix-only). \
+         Use `loop-engine serve` and check the host process directly."
+    )
+}
+
+#[cfg(unix)]
 fn stop() -> Result<ExitCode> {
     observability::init_foreground()?;
     let pid_path = paths::daemon_pid_path()?;
@@ -153,4 +184,12 @@ fn stop() -> Result<ExitCode> {
     }
     println!("loop-engine: sent SIGTERM to pid={pid}");
     Ok(ExitCode::SUCCESS)
+}
+
+#[cfg(not(unix))]
+fn stop() -> Result<ExitCode> {
+    anyhow::bail!(
+        "loop-engine: stop command is not supported on Windows (daemon mode is Unix-only). \
+         Terminate the loop-engine.exe process via Task Manager or `taskkill /F /IM loop-engine.exe`."
+    )
 }
