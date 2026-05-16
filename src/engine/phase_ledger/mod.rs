@@ -201,6 +201,16 @@ pub async fn get_ledger(
     let keys = storage.list(&prefix).await?;
     let mut out = Vec::with_capacity(keys.len());
     for key in keys {
+        // LocalFsStorage's CAS layer creates `<key>.lock` sidecar files
+        // (advisory flocks). `Storage::list` returns those alongside the
+        // real entries. Filter to just `<phase>.yaml` to avoid trying
+        // to YAML-parse binary lock files. Audit-missed bug (caught
+        // pre-commit on first end-to-end smoke test): MemoryStorage
+        // has no lock sidecars, so the unit tests didn't catch this.
+        let s = key.as_str();
+        if !s.ends_with(".yaml") {
+            continue;
+        }
         let bytes = storage.get(&key).await?;
         let Some(bytes) = bytes else { continue };
         let entry = parse_entry_yaml(&bytes, key.as_str())?;
@@ -397,5 +407,41 @@ mod tests {
     fn parse_entry_unknown_phase_errors() {
         let bad = b"phase: bogus_phase\nlogged_at: 2026-05-16T07:42:11.000Z\n";
         assert!(parse_entry_yaml(bad, "k").is_err());
+    }
+
+    // v0.5.1 regression test: LocalFsStorage's CAS layer creates
+    // `<key>.lock` sidecar files (advisory flocks). `Storage::list`
+    // returns those alongside `.yaml` entries; `get_ledger` filters
+    // by suffix so we don't try to YAML-parse the binary lock file.
+    // MemoryStorage doesn't create lock sidecars so the unit tests
+    // here would have missed this bug — hence the LocalFs-backed
+    // regression test below. Surfaced by end-to-end smoke test of
+    // v0.5.0 against the released arm64 Mac binary.
+    #[tokio::test]
+    async fn get_ledger_skips_lock_sidecars_localfs() {
+        use crate::engine::storage::LocalFsStorage;
+        use tempfile::TempDir;
+        let dir = TempDir::new().unwrap();
+        let storage = LocalFsStorage::new(dir.path());
+        let ctx = Context::single_user_local();
+        // Write one phase entry; LocalFs flock creates a `.lock`
+        // sidecar next to it as part of put_if_version.
+        log_phase(
+            &ctx,
+            &storage,
+            "smoke-session",
+            "smoke-task",
+            Phase::Audit,
+            Some("v0.5.1 regression"),
+        )
+        .await
+        .expect("log_phase write");
+        // Readback should return exactly one entry, ignoring the lock.
+        let entries = get_ledger(&ctx, &storage, "smoke-session", "smoke-task")
+            .await
+            .expect("get_ledger must not choke on lock sidecar");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].phase, Phase::Audit);
+        assert_eq!(entries[0].note.as_deref(), Some("v0.5.1 regression"));
     }
 }

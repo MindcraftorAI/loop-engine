@@ -13,6 +13,28 @@ external consumer.
 
 ## [Unreleased]
 
+## [0.5.1] — 2026-05-16
+
+**Patch fix: `task.get_ledger` chokes on LocalFs lock sidecars.**
+
+End-to-end smoke test of the v0.5.0 binary surfaced an audit-missed
+bug. `LocalFsStorage::list()` returns `<key>.lock` sidecar files
+(advisory flocks created by the CAS layer) alongside the `<phase>.yaml`
+entries. `get_ledger` then tried to YAML-parse the binary lock file
+and returned an `internal: malformed entry` error.
+
+The unit tests all used `MemoryStorage` (which has no lock sidecars),
+so the audit pass didn't catch the cross-backend divergence. Fix
+filters `list()` results to `.yaml` suffix before parsing.
+
+New regression test uses `LocalFsStorage` against a `TempDir` so the
+in-memory-only test surface isn't a blind spot for future ledger
+changes.
+
+First real dogfood-discovered bug of v0.5.0. Caught BEFORE any
+consumer hit it because the v0.6.1 workflow gate (opensquid) is now
+forcing end-to-end smoke tests on every release.
+
 ## [0.5.0] — 2026-05-16
 
 **Phase ledger + Windows-supported binary.**

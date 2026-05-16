@@ -1,6 +1,6 @@
 [package]
 name = "loop-engine"
-version = "0.5.0"
+version = "0.5.1"
 edition = "2024"
 rust-version = "1.95"
 description = "Cognitive-memory substrate for AI agents — manifest assembly, lesson lifecycle, scoped memory, and a wedge-gated promotion check"
