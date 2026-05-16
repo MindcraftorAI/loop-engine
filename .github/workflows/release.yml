@@ -58,6 +58,7 @@ jobs:
             os: ubuntu-latest
             archive: tar.gz
             cross_linker: aarch64-linux-gnu-gcc
+            cross_cc: aarch64-linux-gnu-gcc
             apt_packages: gcc-aarch64-linux-gnu
           - target: x86_64-pc-windows-msvc
             os: windows-latest
@@ -67,6 +68,18 @@ jobs:
             archive: zip
     steps:
       - uses: actions/checkout@v4
+
+      # Resolve the version string used for artifact naming + release
+      # upload. On tag push, github.ref_name is the tag (e.g. "v0.4.0").
+      # On workflow_dispatch, github.ref_name is the branch ("main"),
+      # so we fall back to inputs.tag. Without this resolver step,
+      # manual dispatches would silently produce artifacts named
+      # `loop-engine-main-<target>.tar.gz` and try to attach them to a
+      # branch ref. (audit fix — workflow_dispatch HIGH.)
+      - name: resolve version
+        id: ver
+        shell: bash
+        run: echo "tag=${{ github.event.inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
 
       - name: install rust toolchain for ${{ matrix.target }}
         uses: dtolnay/rust-toolchain@stable
@@ -88,6 +101,15 @@ jobs:
         run: |
           echo "CARGO_TARGET_$(echo ${{ matrix.target }} | tr 'a-z-' 'A-Z_')_LINKER=${{ matrix.cross_linker }}" >> "$GITHUB_ENV"
 
+      # Belt-and-suspenders for any transitive dep that pulls in the `cc`
+      # crate to compile C (ring, zstd-sys, openssl-sys, etc.). Pure-Rust
+      # today but transitive deps drift. (audit fix — Linux ARM64 MED.)
+      - name: configure C compiler for ${{ matrix.target }}
+        if: matrix.cross_cc != ''
+        run: |
+          TARGET_UNDERSCORED=$(echo ${{ matrix.target }} | tr '-' '_')
+          echo "CC_${TARGET_UNDERSCORED}=${{ matrix.cross_cc }}" >> "$GITHUB_ENV"
+
       - name: cargo build --release --target ${{ matrix.target }}
         run: cargo build --release --target ${{ matrix.target }} --bin loop-engine
 
@@ -96,7 +118,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          STAGE="loop-engine-${{ github.ref_name }}-${{ matrix.target }}"
+          STAGE="loop-engine-${{ steps.ver.outputs.tag }}-${{ matrix.target }}"
           mkdir -p "dist/$STAGE"
           cp "target/${{ matrix.target }}/release/loop-engine" "dist/$STAGE/loop-engine"
           chmod +x "dist/$STAGE/loop-engine"
@@ -112,7 +134,7 @@ jobs:
         if: matrix.archive == 'zip'
         shell: pwsh
         run: |
-          $stage = "loop-engine-${{ github.ref_name }}-${{ matrix.target }}"
+          $stage = "loop-engine-${{ steps.ver.outputs.tag }}-${{ matrix.target }}"
           New-Item -ItemType Directory -Force -Path "dist/$stage" | Out-Null
           Copy-Item "target/${{ matrix.target }}/release/loop-engine.exe" "dist/$stage/loop-engine.exe"
           if (Test-Path "README.md") { Copy-Item "README.md" "dist/$stage/" }
@@ -152,8 +174,8 @@ jobs:
       - name: create / update github release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name }}
-          name: ${{ github.ref_name }}
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: ${{ steps.ver.outputs.tag }}
           generate_release_notes: true
           files: |
             dist/*.tar.gz
