@@ -14,6 +14,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
+#[cfg(unix)]
 use tokio::signal::unix::{SignalKind, signal};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
@@ -74,6 +75,7 @@ pub fn remove_pid_file() -> Result<()> {
 /// SIGTERM/SIGINT/SIGHUP. Returns immediately; the handlers run as
 /// detached tokio tasks for the lifetime of the runtime. Multi-fire is
 /// idempotent — `CancellationToken::cancel()` is safe to call repeatedly.
+#[cfg(unix)]
 pub fn install_signal_handlers(shutdown: CancellationToken) -> Result<()> {
     let mut sigterm = signal(SignalKind::terminate())?;
     let mut sigint = signal(SignalKind::interrupt())?;
@@ -99,6 +101,22 @@ pub fn install_signal_handlers(shutdown: CancellationToken) -> Result<()> {
         s3.cancel();
     });
 
+    Ok(())
+}
+
+/// Windows fallback: tokio doesn't expose SIGTERM/SIGHUP semantics on
+/// Windows. We listen for Ctrl-C only (the closest equivalent), which
+/// is enough for `loop-engine run --foreground` on Windows. Detached
+/// daemon mode is Unix-only (cfg-gated in main.rs) so this is the
+/// only signal-path the Windows binary takes.
+#[cfg(not(unix))]
+pub fn install_signal_handlers(shutdown: CancellationToken) -> Result<()> {
+    tokio::spawn(async move {
+        if tokio::signal::ctrl_c().await.is_ok() {
+            info!("received Ctrl-C, initiating shutdown");
+            shutdown.cancel();
+        }
+    });
     Ok(())
 }
 
