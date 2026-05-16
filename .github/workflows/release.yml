@@ -45,8 +45,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # x86_64-apple-darwin cross-compiles from arm64 macOS. GitHub
+          # removed the Intel Mac runner (`macos-13`) in late 2025;
+          # jobs targeting it queue forever waiting for a runner type
+          # that no longer exists. Apple's toolchain on arm64 macOS
+          # includes the x86_64 backend natively — `rustup target add`
+          # is enough, no extra linker needed.
           - target: x86_64-apple-darwin
-            os: macos-13
+            os: macos-latest
             archive: tar.gz
           - target: aarch64-apple-darwin
             os: macos-latest
