@@ -13,6 +13,8 @@ external consumer.
 
 ## [Unreleased]
 
+## [0.5.2] — 2026-05-17
+
 ### Changed — phase ledger goes per-task, not per-(session, task) (#166)
 
 **Breaking RPC change.** `task.log_phase` and `task.get_ledger` no
