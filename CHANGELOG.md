@@ -13,27 +13,40 @@ external consumer.
 
 ## [Unreleased]
 
+## [0.5.3] — 2026-05-17
+
+### Docs — scrub consumer-specific naming from 0.5.2 CHANGELOG entry
+
+Rewrote the 0.5.2 entry to describe the change in engine-domain terms
+only. Engine is a general substrate and its CHANGELOG must not name
+specific consumers; previous text named one consumer by product
+name + referenced consumer-side concepts (tool names, hook names,
+namespaced disk paths, host-runtime concepts). Replaced with neutral
+language: "the RPC writer," "the RPC reader," "the consumer's
+storage prefix." No code change.
+
 ## [0.5.2] — 2026-05-17
 
-### Changed — phase ledger goes per-task, not per-(session, task) (#166)
+### Changed — phase ledger goes per-task, not per-(session, task)
 
 **Breaking RPC change.** `task.log_phase` and `task.get_ledger` no
-longer accept a `session_id` field. The on-disk layout changes from
+longer accept a `session_id` field. The on-disk layout under the
+consumer's storage prefix changes from
 `phase_ledger/<session_id>/<task_id>/<phase>.yaml` to
 `phase_ledger/<task_id>/<phase>.yaml`.
 
-**Why:** writers (opensquid's `log_phase` MCP tool) supplied a
-PID-derived MCP session id (`mcp-<pid>-<startMs36>`) while readers
-(opensquid's workflow-gate hook) supplied Claude Code's session UUID
-(`26e0203a-...`). The two id surfaces never matched — the ledger
-was effectively unreadable across them, which made the headline
-drift gate a silent no-op for the entire 2026-05-17 evening session.
+**Why:** When the RPC writer and the RPC reader supplied different
+opaque values for `session_id` (e.g. a writer keyed off a process
+identity, a reader keyed off a host-runtime session identity), the
+ledger was unreadable across them — writes and reads landed under
+different `session_id` path segments and never intersected. A task
+is the natural unit of phase accumulation; sessions are not. Drop
+`session_id` from the storage scheme entirely.
 
-**Migration:** any existing entries under
-`~/.opensquid/phase_ledger/<old-session-id>/` (or `~/.loop/...` for
-direct-engine consumers) are orphaned and will not be read by the
-new code. They aren't deleted automatically; consumers can `rm -rf`
-those subdirectories at their leisure.
+**Migration:** any existing entries under the consumer's storage
+prefix at `phase_ledger/<old-session-id>/...` are orphaned and will
+not be read by the new code. They aren't deleted automatically;
+the consumer can clean them at its discretion.
 
 **API surface impact:**
 - `loop_engine::engine::phase_ledger::log_phase` — drops `session_id`
@@ -48,13 +61,12 @@ those subdirectories at their leisure.
 
 **Tests:** 9 of the 10 RPC tests in `src/serve.rs` retained (params
 updated to drop `session_id`). `task_get_ledger_isolates_sessions`
-deleted — sessions no longer isolate by design, and a task spanning
-multiple sessions (e.g. after `claude --resume`) must accumulate
-phases across them. 587/587 lib tests green.
+deleted — sessions no longer isolate by design; a task that the
+consumer continues across multiple sessions must accumulate phases
+across them. 587/587 lib tests green.
 
 Pre-1.0, so this is a permitted breaking change per the SemVer 0.x
-clause in this changelog's header. Sole consumer (opensquid) ships
-its corresponding update in lockstep.
+clause in this changelog's header.
 
 ## [0.5.1] — 2026-05-16
 
