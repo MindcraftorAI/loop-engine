@@ -1,10 +1,10 @@
-//! Per-session workflow phase ledger.
+//! Per-task workflow phase ledger.
 //!
 //! Records which workflow phases (pre_research, learn, code, test,
-//! audit, post_research, fix) have been logged for a given
-//! `(session_id, task_id)` pair. The engine is opaque to what "task"
-//! means — it's just a stable string discriminator supplied by the
-//! caller. The engine speaks ledger, not task semantics.
+//! audit, post_research, fix) have been logged for a given `task_id`.
+//! The engine is opaque to what "task" means — it's just a stable
+//! string discriminator supplied by the caller. The engine speaks
+//! ledger, not task semantics.
 //!
 //! ### Storage layout
 //!
@@ -16,8 +16,15 @@
 //!
 //! On disk (single-user mode):
 //! ```text
-//! ~/.loop/phase_ledger/<session_id>/<task_id>/<phase>.yaml
+//! ~/.loop/phase_ledger/<task_id>/<phase>.yaml
 //! ```
+//!
+//! Pre-#166 this layout included a `<session_id>` segment ahead of
+//! `<task_id>`. That made the ledger unreadable across the two id
+//! surfaces that opensquid uses (MCP server PID for writes, Claude
+//! Code session UUID for reads). Tasks are the natural granularity
+//! for phase progress regardless — tasks span sessions, sessions
+//! don't carve up tasks.
 //!
 //! Each entry is a YAML object:
 //! ```yaml
@@ -29,10 +36,9 @@
 //! ### Input safety
 //!
 //! `StorageKey::from_raw` panics on `..`, leading `/`, or `\`. Callers
-//! supply `session_id` and `task_id` from outside the engine, so the
-//! ledger functions validate them against `[A-Za-z0-9_-]{1,128}` BEFORE
-//! constructing the key. Rejection is an error to the RPC caller, not
-//! a daemon crash.
+//! supply `task_id` from outside the engine, so the ledger functions
+//! validate it against `[A-Za-z0-9_-]{1,128}` BEFORE constructing the
+//! key. Rejection is an error to the RPC caller, not a daemon crash.
 
 use bytes::Bytes;
 use chrono::{SecondsFormat, Utc};
@@ -152,17 +158,15 @@ fn validate_id(field: &'static str, value: &str) -> Result<(), LedgerError> {
 const NOTE_MAX_BYTES: usize = 16 * 1024;
 
 /// Record a phase entry. Returns `Ok(true)` on new write, `Ok(false)`
-/// when this `(session, task, phase)` was already logged (idempotent
-/// noop — the existing entry stands, not overwritten).
+/// when this `(task, phase)` was already logged (idempotent noop — the
+/// existing entry stands, not overwritten).
 pub async fn log_phase(
     ctx: &Context,
     storage: &dyn Storage,
-    session_id: &str,
     task_id: &str,
     phase: Phase,
     note: Option<&str>,
 ) -> Result<bool, LedgerError> {
-    validate_id("session_id", session_id)?;
     validate_id("task_id", task_id)?;
     if let Some(n) = note
         && n.len() > NOTE_MAX_BYTES
@@ -178,7 +182,7 @@ pub async fn log_phase(
         note: note.map(|s| s.to_string()),
     };
     let body = render_entry_yaml(&entry);
-    let key = StorageKey::phase_log(ctx, session_id, task_id, phase.as_str());
+    let key = StorageKey::phase_log(ctx, task_id, phase.as_str());
     // Create-only: first write wins, re-logs are noop.
     let written = storage
         .put_if_version(&key, Bytes::from(body), None)
@@ -186,18 +190,16 @@ pub async fn log_phase(
     Ok(written)
 }
 
-/// List all phases logged for `(session, task)`. Returns entries in
-/// the order the storage backend lists them — callers requiring a
-/// deterministic order should sort.
+/// List all phases logged for `task_id`. Returns entries in the order
+/// the storage backend lists them — callers requiring a deterministic
+/// order should sort.
 pub async fn get_ledger(
     ctx: &Context,
     storage: &dyn Storage,
-    session_id: &str,
     task_id: &str,
 ) -> Result<Vec<LedgerEntry>, LedgerError> {
-    validate_id("session_id", session_id)?;
     validate_id("task_id", task_id)?;
-    let prefix = StorageKey::phase_ledger_task_prefix(ctx, session_id, task_id);
+    let prefix = StorageKey::phase_ledger_task_prefix(ctx, task_id);
     let keys = storage.list(&prefix).await?;
     let mut out = Vec::with_capacity(keys.len());
     for key in keys {
@@ -429,7 +431,6 @@ mod tests {
         log_phase(
             &ctx,
             &storage,
-            "smoke-session",
             "smoke-task",
             Phase::Audit,
             Some("v0.5.1 regression"),
@@ -437,7 +438,7 @@ mod tests {
         .await
         .expect("log_phase write");
         // Readback should return exactly one entry, ignoring the lock.
-        let entries = get_ledger(&ctx, &storage, "smoke-session", "smoke-task")
+        let entries = get_ledger(&ctx, &storage, "smoke-task")
             .await
             .expect("get_ledger must not choke on lock sidecar");
         assert_eq!(entries.len(), 1);

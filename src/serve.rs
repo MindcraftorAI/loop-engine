@@ -1598,16 +1598,20 @@ fn preview(body: &str, max: usize) -> String {
 // ---------------------------------------------------------------------
 // Phase ledger handlers (v0.5)
 //
-// The engine stores per-(session, task, phase) entries. Consumers use
-// the ledger to gate downstream operations on workflow phase coverage
-// — e.g. "block `git commit` if audit + post_research haven't been
+// The engine stores per-(task, phase) entries. Consumers use the
+// ledger to gate downstream operations on workflow phase coverage —
+// e.g. "block `git commit` if audit + post_research haven't been
 // logged for the active task." The engine itself doesn't know what
 // "active task" means; consumers supply task_id as an opaque string.
+//
+// Pre-#166 these handlers also required a `session_id`, but writes
+// (MCP server PID) and reads (Claude Code session UUID) used
+// different id surfaces — the ledger was effectively unreadable
+// across the two. Dropped in favor of per-task scoping.
 // ---------------------------------------------------------------------
 
 #[derive(Deserialize)]
 struct TaskLogPhaseParams {
-    session_id: String,
     task_id: String,
     /// Snake-case phase identifier — must match one of the seven values
     /// `Phase` recognizes (`pre_research`, `learn`, `code`, `test`,
@@ -1632,19 +1636,11 @@ async fn task_log_phase(
             p.phase
         ))
     })?;
-    let written = phase_ledger::log_phase(
-        ctx,
-        storage,
-        &p.session_id,
-        &p.task_id,
-        phase,
-        p.note.as_deref(),
-    )
-    .await
-    .map_err(ledger_to_dispatch)?;
+    let written = phase_ledger::log_phase(ctx, storage, &p.task_id, phase, p.note.as_deref())
+        .await
+        .map_err(ledger_to_dispatch)?;
     Ok(json!({
         "ok": true,
-        "session_id": p.session_id,
         "task_id": p.task_id,
         "phase": phase.as_str(),
         // false on idempotent re-log (entry already existed) so callers
@@ -1655,7 +1651,6 @@ async fn task_log_phase(
 
 #[derive(Deserialize)]
 struct TaskGetLedgerParams {
-    session_id: String,
     task_id: String,
 }
 
@@ -1666,7 +1661,7 @@ async fn task_get_ledger(
 ) -> std::result::Result<Value, DispatchError> {
     let p: TaskGetLedgerParams =
         serde_json::from_value(params).map_err(|e| DispatchError::InvalidParams(e.to_string()))?;
-    let entries = phase_ledger::get_ledger(ctx, storage, &p.session_id, &p.task_id)
+    let entries = phase_ledger::get_ledger(ctx, storage, &p.task_id)
         .await
         .map_err(ledger_to_dispatch)?;
     let phases: Vec<&'static str> = entries.iter().map(|e| e.phase.as_str()).collect();
@@ -1681,7 +1676,6 @@ async fn task_get_ledger(
         })
         .collect();
     Ok(json!({
-        "session_id": p.session_id,
         "task_id": p.task_id,
         "phases_logged": phases,
         "entries": entry_json,
@@ -1807,7 +1801,6 @@ mod tests {
     async fn task_log_phase_records_and_reads_back() {
         let (ctx, storage) = test_ctx_and_storage();
         let params = json!({
-            "session_id": "session-abc",
             "task_id": "task-127",
             "phase": "audit",
             "note": "13 retroactive findings",
@@ -1817,13 +1810,9 @@ mod tests {
         assert_eq!(resp["newly_recorded"], json!(true));
         assert_eq!(resp["phase"], json!("audit"));
 
-        let ledger = task_get_ledger(
-            json!({"session_id": "session-abc", "task_id": "task-127"}),
-            &ctx,
-            &storage,
-        )
-        .await
-        .unwrap();
+        let ledger = task_get_ledger(json!({"task_id": "task-127"}), &ctx, &storage)
+            .await
+            .unwrap();
         let phases = ledger["phases_logged"].as_array().unwrap();
         assert_eq!(phases.len(), 1);
         assert_eq!(phases[0], json!("audit"));
@@ -1835,7 +1824,6 @@ mod tests {
     async fn task_log_phase_idempotent_relog() {
         let (ctx, storage) = test_ctx_and_storage();
         let params = json!({
-            "session_id": "session-abc",
             "task_id": "task-127",
             "phase": "code",
         });
@@ -1850,13 +1838,9 @@ mod tests {
         assert_eq!(second["ok"], json!(true));
         assert_eq!(second["newly_recorded"], json!(false));
 
-        let ledger = task_get_ledger(
-            json!({"session_id": "session-abc", "task_id": "task-127"}),
-            &ctx,
-            &storage,
-        )
-        .await
-        .unwrap();
+        let ledger = task_get_ledger(json!({"task_id": "task-127"}), &ctx, &storage)
+            .await
+            .unwrap();
         assert_eq!(ledger["phases_logged"].as_array().unwrap().len(), 1);
     }
 
@@ -1865,7 +1849,6 @@ mod tests {
         let (ctx, storage) = test_ctx_and_storage();
         let err = task_log_phase(
             json!({
-                "session_id": "s1",
                 "task_id": "t1",
                 "phase": "review",
             }),
@@ -1882,7 +1865,6 @@ mod tests {
         let (ctx, storage) = test_ctx_and_storage();
         let err = task_log_phase(
             json!({
-                "session_id": "s1",
                 "task_id": "../etc/passwd",
                 "phase": "audit",
             }),
@@ -1897,13 +1879,9 @@ mod tests {
     #[tokio::test]
     async fn task_get_ledger_empty_for_unknown_task() {
         let (ctx, storage) = test_ctx_and_storage();
-        let ledger = task_get_ledger(
-            json!({"session_id": "s1", "task_id": "never-logged"}),
-            &ctx,
-            &storage,
-        )
-        .await
-        .unwrap();
+        let ledger = task_get_ledger(json!({"task_id": "never-logged"}), &ctx, &storage)
+            .await
+            .unwrap();
         assert_eq!(ledger["phases_logged"].as_array().unwrap().len(), 0);
         assert_eq!(ledger["entries"].as_array().unwrap().len(), 0);
     }
@@ -1922,7 +1900,6 @@ mod tests {
         ] {
             task_log_phase(
                 json!({
-                    "session_id": "s1",
                     "task_id": "t1",
                     "phase": phase,
                 }),
@@ -1932,7 +1909,7 @@ mod tests {
             .await
             .unwrap();
         }
-        let ledger = task_get_ledger(json!({"session_id": "s1", "task_id": "t1"}), &ctx, &storage)
+        let ledger = task_get_ledger(json!({"task_id": "t1"}), &ctx, &storage)
             .await
             .unwrap();
         assert_eq!(ledger["phases_logged"].as_array().unwrap().len(), 7);
@@ -1946,21 +1923,17 @@ mod tests {
     #[tokio::test]
     async fn task_get_ledger_isolates_sibling_task_ids() {
         let (ctx, storage) = test_ctx_and_storage();
+        task_log_phase(json!({"task_id": "t1", "phase": "audit"}), &ctx, &storage)
+            .await
+            .unwrap();
         task_log_phase(
-            json!({"session_id": "s1", "task_id": "t1", "phase": "audit"}),
+            json!({"task_id": "t1-extra", "phase": "code"}),
             &ctx,
             &storage,
         )
         .await
         .unwrap();
-        task_log_phase(
-            json!({"session_id": "s1", "task_id": "t1-extra", "phase": "code"}),
-            &ctx,
-            &storage,
-        )
-        .await
-        .unwrap();
-        let ledger = task_get_ledger(json!({"session_id": "s1", "task_id": "t1"}), &ctx, &storage)
+        let ledger = task_get_ledger(json!({"task_id": "t1"}), &ctx, &storage)
             .await
             .unwrap();
         let phases = ledger["phases_logged"].as_array().unwrap();
@@ -1968,53 +1941,11 @@ mod tests {
         assert_eq!(phases[0], json!("audit"));
     }
 
-    // Two sessions logging the same task_id must not collide.
-    #[tokio::test]
-    async fn task_get_ledger_isolates_sessions() {
-        let (ctx, storage) = test_ctx_and_storage();
-        task_log_phase(
-            json!({"session_id": "s1", "task_id": "shared", "phase": "audit"}),
-            &ctx,
-            &storage,
-        )
-        .await
-        .unwrap();
-        task_log_phase(
-            json!({"session_id": "s2", "task_id": "shared", "phase": "code"}),
-            &ctx,
-            &storage,
-        )
-        .await
-        .unwrap();
-        let s1 = task_get_ledger(
-            json!({"session_id": "s1", "task_id": "shared"}),
-            &ctx,
-            &storage,
-        )
-        .await
-        .unwrap();
-        let s2 = task_get_ledger(
-            json!({"session_id": "s2", "task_id": "shared"}),
-            &ctx,
-            &storage,
-        )
-        .await
-        .unwrap();
-        let s1_phases: Vec<&str> = s1["phases_logged"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|v| v.as_str().unwrap())
-            .collect();
-        let s2_phases: Vec<&str> = s2["phases_logged"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|v| v.as_str().unwrap())
-            .collect();
-        assert_eq!(s1_phases, vec!["audit"]);
-        assert_eq!(s2_phases, vec!["code"]);
-    }
+    // (#166) Deleted `task_get_ledger_isolates_sessions`: the ledger is
+    // now per-task, not per-(session, task). Cross-session collision on
+    // the same task_id is INTENDED — a task that spans multiple sessions
+    // (e.g. after `/resume`) must accumulate phases across them, which
+    // is the whole reason the session_id segment was dropped.
 
     // Audit MED fix: get_ledger must sort by logged_at (deterministic
     // chronological order regardless of backend incidental ordering).
@@ -2031,17 +1962,13 @@ mod tests {
             "test",
         ];
         for phase in log_order {
-            task_log_phase(
-                json!({"session_id": "s1", "task_id": "t1", "phase": phase}),
-                &ctx,
-                &storage,
-            )
-            .await
-            .unwrap();
+            task_log_phase(json!({"task_id": "t1", "phase": phase}), &ctx, &storage)
+                .await
+                .unwrap();
             // Sleep 2ms so timestamps differentiate (RFC3339 ms precision).
             tokio::time::sleep(std::time::Duration::from_millis(2)).await;
         }
-        let ledger = task_get_ledger(json!({"session_id": "s1", "task_id": "t1"}), &ctx, &storage)
+        let ledger = task_get_ledger(json!({"task_id": "t1"}), &ctx, &storage)
             .await
             .unwrap();
         let phases: Vec<&str> = ledger["phases_logged"]
@@ -2060,7 +1987,6 @@ mod tests {
         let huge = "a".repeat(16 * 1024 + 1);
         let err = task_log_phase(
             json!({
-                "session_id": "s1",
                 "task_id": "t1",
                 "phase": "audit",
                 "note": huge,

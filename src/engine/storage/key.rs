@@ -49,21 +49,28 @@ impl StorageKey {
         Self(prefixed(ctx, &suffix))
     }
 
-    /// Per-(session, task, phase) workflow ledger entry. One file per
-    /// phase; create-only writes (mirrors `sentiment_signal`). Used by
-    /// the phase_ledger module — see its docs for the schema.
+    /// Per-(task, phase) workflow ledger entry. One file per phase;
+    /// create-only writes (mirrors `sentiment_signal`). Used by the
+    /// phase_ledger module — see its docs for the schema.
     ///
-    /// Callers MUST pre-validate `session_id`, `task_id`, `phase`
-    /// against `[A-Za-z0-9_-]` before reaching here (the `phase_ledger`
-    /// module enforces this; this constructor doesn't re-check).
-    pub fn phase_log(ctx: &Context, session_id: &str, task_id: &str, phase: &str) -> Self {
-        let suffix = format!("phase_ledger/{session_id}/{task_id}/{phase}.yaml");
+    /// Callers MUST pre-validate `task_id`, `phase` against
+    /// `[A-Za-z0-9_-]` before reaching here (the `phase_ledger` module
+    /// enforces this; this constructor doesn't re-check).
+    ///
+    /// Pre-#166 this key included a `session_id` segment, but writers
+    /// (MCP server process id) and readers (Claude Code session UUID)
+    /// supplied different id surfaces, so the ledger was unreadable
+    /// across the two. Task id is the natural granularity for phase
+    /// progress regardless — tasks span sessions, sessions don't carve
+    /// up tasks.
+    pub fn phase_log(ctx: &Context, task_id: &str, phase: &str) -> Self {
+        let suffix = format!("phase_ledger/{task_id}/{phase}.yaml");
         Self(prefixed(ctx, &suffix))
     }
 
-    /// Prefix key for listing every phase logged for one `(session,
-    /// task)` pair. Backend's `list()` returns the per-phase file keys
-    /// under this prefix.
+    /// Prefix key for listing every phase logged for one `task_id`.
+    /// Backend's `list()` returns the per-phase file keys under this
+    /// prefix.
     ///
     /// **Trailing slash is load-bearing.** `MemoryStorage::list` uses
     /// `starts_with` for prefix matching; without the slash, a query
@@ -71,8 +78,8 @@ impl StorageKey {
     /// `task_id="t1-extra"`. `LocalFsStorage::list` uses `read_dir` so
     /// isn't affected — but the cross-backend divergence would only
     /// surface in production. Trailing slash makes both backends match.
-    pub fn phase_ledger_task_prefix(ctx: &Context, session_id: &str, task_id: &str) -> Self {
-        let suffix = format!("phase_ledger/{session_id}/{task_id}/");
+    pub fn phase_ledger_task_prefix(ctx: &Context, task_id: &str) -> Self {
+        let suffix = format!("phase_ledger/{task_id}/");
         Self(prefixed(ctx, &suffix))
     }
 

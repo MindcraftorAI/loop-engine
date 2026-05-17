@@ -13,6 +13,47 @@ external consumer.
 
 ## [Unreleased]
 
+### Changed — phase ledger goes per-task, not per-(session, task) (#166)
+
+**Breaking RPC change.** `task.log_phase` and `task.get_ledger` no
+longer accept a `session_id` field. The on-disk layout changes from
+`phase_ledger/<session_id>/<task_id>/<phase>.yaml` to
+`phase_ledger/<task_id>/<phase>.yaml`.
+
+**Why:** writers (opensquid's `log_phase` MCP tool) supplied a
+PID-derived MCP session id (`mcp-<pid>-<startMs36>`) while readers
+(opensquid's workflow-gate hook) supplied Claude Code's session UUID
+(`26e0203a-...`). The two id surfaces never matched — the ledger
+was effectively unreadable across them, which made the headline
+drift gate a silent no-op for the entire 2026-05-17 evening session.
+
+**Migration:** any existing entries under
+`~/.opensquid/phase_ledger/<old-session-id>/` (or `~/.loop/...` for
+direct-engine consumers) are orphaned and will not be read by the
+new code. They aren't deleted automatically; consumers can `rm -rf`
+those subdirectories at their leisure.
+
+**API surface impact:**
+- `loop_engine::engine::phase_ledger::log_phase` — drops `session_id`
+  parameter
+- `loop_engine::engine::phase_ledger::get_ledger` — same
+- `loop_engine::engine::storage::StorageKey::phase_log` — drops
+  `session_id` parameter
+- `loop_engine::engine::storage::StorageKey::phase_ledger_task_prefix`
+  — same
+- `task.log_phase` RPC response — drops `session_id` echo field
+- `task.get_ledger` RPC response — same
+
+**Tests:** 9 of the 10 RPC tests in `src/serve.rs` retained (params
+updated to drop `session_id`). `task_get_ledger_isolates_sessions`
+deleted — sessions no longer isolate by design, and a task spanning
+multiple sessions (e.g. after `claude --resume`) must accumulate
+phases across them. 587/587 lib tests green.
+
+Pre-1.0, so this is a permitted breaking change per the SemVer 0.x
+clause in this changelog's header. Sole consumer (opensquid) ships
+its corresponding update in lockstep.
+
 ## [0.5.1] — 2026-05-16
 
 **Patch fix: `task.get_ledger` chokes on LocalFs lock sidecars.**
