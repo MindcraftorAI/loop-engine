@@ -1,6 +1,6 @@
 [package]
 name = "loop-engine"
-version = "0.5.3"
+version = "0.5.4"
 edition = "2024"
 rust-version = "1.95"
 description = "Cognitive-memory substrate for AI agents — manifest assembly, lesson lifecycle, scoped memory, and a wedge-gated promotion check"
@@ -20,7 +20,7 @@ path = "src/main.rs"
 
 [dependencies]
 # Async runtime
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "signal", "time", "fs", "io-std", "io-util"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "signal", "time", "fs", "io-std", "io-util", "net"] }
 # CancellationToken — sticky shutdown primitive. Switched from
 # `tokio::sync::Notify` after Day 10 audit found a signal-before-waiter
 # race: if SIGTERM arrives before the heartbeat loop registers on

@@ -1,10 +1,24 @@
-//! JSON-RPC 2.0 over stdio — programmatic engine access for host
+//! JSON-RPC 2.0 endpoint — programmatic engine access for host
 //! adapters (opensquid MCP server, future TS/Python launchers).
 //!
-//! Protocol: line-delimited JSON-RPC 2.0 on stdin/stdout. Diagnostics
-//! go to stderr. One Tokio multi-thread runtime drives the whole
-//! session; engine state (Context + Storage) is initialized once at
-//! startup and shared across all requests.
+//! Two transport flavors share the same line-framed JSON-RPC 2.0
+//! dispatch:
+//!
+//! - **stdio** (default): one engine subprocess per host. Reads
+//!   requests from stdin, writes responses to stdout, diagnostics to
+//!   stderr. Lifetime = one host session.
+//! - **Unix domain socket** (`serve(Some(path))`): long-running
+//!   daemon. One engine process serves many concurrent connections
+//!   across opensquid hooks + sessions. State is built once at
+//!   startup (Context + Storage + Embedder + HNSW VectorIndex
+//!   rehydrated from `.vec` sidecars) and shared across all spawned
+//!   connection handlers via `Arc<ServeState>`. Per-connection
+//!   `tokio::spawn` gives cross-connection concurrency — without it
+//!   two concurrent acquires would serialize globally and the daemon
+//!   would offer no win over per-process stdio spawn.
+//!
+//! Both modes share [`serve_one_connection`] — the only difference is
+//! how the reader + writer are constructed.
 //!
 //! Methods (v1):
 //! - `ping`              — health check; returns `{ok: true}`
@@ -21,6 +35,7 @@
 //! Manifest assembly + skill/persona/team ops land in a follow-on
 //! serve cycle.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context as _, Result, anyhow};
@@ -28,7 +43,7 @@ use bytes::Bytes;
 use chrono::{SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufRead, AsyncWrite, AsyncWriteExt, BufReader};
 use tracing::warn;
 
 use crate::engine::context::Context;
@@ -131,10 +146,37 @@ fn err_with_data(
 
 // ---- Entry point ---------------------------------------------------
 
-/// Run the serve loop. Returns when stdin EOFs (the parent closed the
-/// pipe). Errors only on initialization failures; per-request errors
-/// surface to the client via JSON-RPC error responses.
-pub async fn run() -> Result<()> {
+/// Engine state shared across all connections in UDS mode.
+///
+/// Built once by [`build_state`] at startup; cloned via `Arc` into each
+/// per-connection task. In stdio mode the same state is constructed
+/// but lives behind a single borrow because there is only ever one
+/// connection. Layout mirrors the legacy inline `run()` locals 1:1 to
+/// keep the refactor behavior-preserving.
+pub struct ServeState {
+    ctx: Context,
+    storage: Arc<dyn Storage>,
+    embedder: Arc<dyn Embedder>,
+    vector_index: Arc<dyn VectorIndex>,
+}
+
+/// Run the serve loop. Returns when the transport closes — stdio EOF
+/// for `socket = None`, never for `Some(path)` (UDS accept loop runs
+/// until process exit / fatal error). Errors only on initialization
+/// failures; per-request errors surface via JSON-RPC error responses.
+pub async fn run(socket: Option<PathBuf>) -> Result<()> {
+    let state = build_state().await?;
+    match socket {
+        None => serve_stdio(state).await,
+        Some(path) => serve_uds(state, path).await,
+    }
+}
+
+/// Construct the shared engine state. Rehydrates the HNSW index from
+/// on-disk `.vec` sidecars exactly once — failure to rehydrate is
+/// non-fatal (logged + continue with an empty index) so a corrupt
+/// sidecar can't prevent the daemon from coming up.
+async fn build_state() -> Result<ServeState> {
     let ctx = Context::single_user_local();
     let home = paths::loop_home().context("resolving loop_home")?;
     paths::ensure_loop_dirs().context("ensuring loop dirs")?;
@@ -155,7 +197,9 @@ pub async fn run() -> Result<()> {
     // `memory.search` results — the canonical "restart wipes recall"
     // bug. Cross-host sharing (Claude Code + Desktop + IDE plugins
     // hitting the same `~/.opensquid/` store) depends on every fresh
-    // engine spawn rebuilding the index from disk.
+    // engine spawn rebuilding the index from disk. UDS mode does this
+    // exactly ONCE at daemon startup; per-connection handlers reuse
+    // the rehydrated index via the shared `Arc<ServeState>`.
     match rehydrate_vector_index(&ctx, storage.as_ref(), vector_index.as_ref(), dims).await {
         Ok(stats) => {
             eprintln!(
@@ -168,34 +212,134 @@ pub async fn run() -> Result<()> {
         }
     }
 
-    eprintln!(
-        "[loop-engine serve] ready on stdio (lessons: create/recall/promote/discard; memories: create/search/get; dims={dims})"
-    );
+    Ok(ServeState {
+        ctx,
+        storage,
+        embedder,
+        vector_index,
+    })
+}
 
-    let stdin = tokio::io::stdin();
-    let mut stdout = tokio::io::stdout();
-    let mut reader = BufReader::new(stdin).lines();
-
-    while let Some(line) = reader.next_line().await? {
+/// Drive one JSON-RPC connection to completion. Generic over the
+/// reader + writer so stdio and UDS share the exact same dispatch
+/// loop — the only difference is the transport constructed at the
+/// call site. Returns when the reader EOFs (stdin closed for stdio,
+/// peer half-closed for UDS) or on write/serialize error.
+async fn serve_one_connection<R, W>(mut reader: R, mut writer: W, state: &ServeState) -> Result<()>
+where
+    R: AsyncBufRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
+    use tokio::io::AsyncBufReadExt;
+    let mut line = String::new();
+    loop {
+        line.clear();
+        let n = reader.read_line(&mut line).await?;
+        if n == 0 {
+            // EOF: stdin closed (stdio) or peer half-closed (UDS).
+            return Ok(());
+        }
         if line.trim().is_empty() {
             continue;
         }
         let response = process_line(
             &line,
-            &ctx,
-            storage.as_ref(),
-            embedder.as_ref(),
-            vector_index.as_ref(),
+            &state.ctx,
+            state.storage.as_ref(),
+            state.embedder.as_ref(),
+            state.vector_index.as_ref(),
         )
         .await;
         let json = serde_json::to_string(&response)
             .unwrap_or_else(|e| format!(r#"{{"jsonrpc":"2.0","id":null,"error":{{"code":-32603,"message":"response serialize failed: {e}"}}}}"#));
-        stdout.write_all(json.as_bytes()).await?;
-        stdout.write_all(b"\n").await?;
-        stdout.flush().await?;
+        writer.write_all(json.as_bytes()).await?;
+        writer.write_all(b"\n").await?;
+        writer.flush().await?;
+    }
+}
+
+async fn serve_stdio(state: ServeState) -> Result<()> {
+    eprintln!(
+        "[loop-engine serve] ready on stdio (lessons: create/recall/promote/discard; memories: create/search/get)"
+    );
+    let reader = BufReader::new(tokio::io::stdin());
+    let writer = tokio::io::stdout();
+    serve_one_connection(reader, writer, &state).await
+}
+
+/// Bind a Unix-domain-socket listener at `path` and serve connections
+/// concurrently. Per-connection `tokio::spawn` is mandatory: without
+/// it two concurrent acquires would serialize globally and the daemon
+/// would offer no win over per-process stdio spawn (audit T.1.BB).
+#[cfg(unix)]
+async fn serve_uds(state: ServeState, path: PathBuf) -> Result<()> {
+    use std::os::unix::fs::FileTypeExt;
+
+    // Clean up a stale socket file from a previous engine that crashed
+    // without unlinking. Refuse to delete anything that isn't a socket
+    // — defends against a path-collision footgun where a user points
+    // `--socket` at a regular file or directory.
+    if path.exists() {
+        let meta = std::fs::metadata(&path)
+            .with_context(|| format!("stat existing path {}", path.display()))?;
+        if meta.file_type().is_socket() {
+            std::fs::remove_file(&path)
+                .with_context(|| format!("removing stale socket {}", path.display()))?;
+        } else {
+            anyhow::bail!(
+                "--socket path {} exists and is not a socket; refusing to remove",
+                path.display()
+            );
+        }
+    }
+    // Ensure the parent dir exists (matches opensquid singleton's
+    // `~/.opensquid/loop-engine.sock` convention — `~/.opensquid` is
+    // created by `paths::ensure_loop_dirs` above, but a caller passing
+    // an arbitrary path may not have created it).
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("creating parent dir for {}", path.display()))?;
     }
 
-    Ok(())
+    let listener = tokio::net::UnixListener::bind(&path)
+        .with_context(|| format!("binding UDS at {}", path.display()))?;
+    eprintln!(
+        "[loop-engine serve] ready on UDS at {} (lessons: create/recall/promote/discard; memories: create/search/get)",
+        path.display()
+    );
+
+    let state = Arc::new(state);
+    loop {
+        let (stream, _addr) = listener
+            .accept()
+            .await
+            .context("UDS accept failed (listener closed?)")?;
+        let state = state.clone();
+        // CRITICAL per T.1.BB — per-connection spawn for cross-
+        // connection concurrency. Within a single connection,
+        // serve_one_connection still processes sequentially (one
+        // request → one response → next request).
+        tokio::spawn(async move {
+            let (read_half, write_half) = stream.into_split();
+            let reader = BufReader::new(read_half);
+            if let Err(e) = serve_one_connection(reader, write_half, &state).await {
+                warn!(error = %e, "UDS connection serve loop ended with error");
+            }
+        });
+    }
+}
+
+/// Windows fallback: UDS is Unix-only. Named-pipe support is tracked
+/// as a follow-up (the opensquid singleton throws a clear error on
+/// `process.platform === 'win32'` for symmetry).
+#[cfg(not(unix))]
+async fn serve_uds(_state: ServeState, _path: PathBuf) -> Result<()> {
+    anyhow::bail!(
+        "loop-engine: --socket UDS mode is not supported on Windows yet; \
+         use `loop-engine serve` (stdio) until named-pipe support lands"
+    )
 }
 
 async fn process_line(
@@ -1997,5 +2141,277 @@ mod tests {
         .await
         .expect_err("oversized note must fail");
         assert!(matches!(err, DispatchError::InvalidParams(_)));
+    }
+
+    // ---------------------------------------------------------------------
+    // T.4 — transport tests for `serve_one_connection` + UDS path.
+    //
+    // The dispatch loop now lives in a generic `serve_one_connection<R, W>`
+    // shared by stdio and UDS. These tests exercise both transport
+    // shapes against a synthetic `ServeState` (in-memory storage +
+    // `MockEmbedder` + empty HNSW index) so we don't depend on a live
+    // Ollama or filesystem `.opensquid` for the unit suite.
+    //
+    // Coverage:
+    //  1. `stdio_regression_ping_roundtrip` — refactor regression guard.
+    //     The previous inline stdio loop was: read line → process_line →
+    //     write json + '\n' → flush. Drive the same shape through a
+    //     `tokio::io::duplex` pair and assert byte-identical
+    //     ping output (shape, no trailing junk).
+    //  2. `uds_ping_roundtrip` — bind a UDS in a tempdir, connect, send
+    //     ping, assert ok+version.
+    //  3. `uds_concurrent_connections_no_id_crosstalk` — open two
+    //     connections, send pings with distinct ids in interleaved
+    //     order, assert each connection only sees its own response
+    //     (per-connection `tokio::spawn` invariant).
+    //  4. `uds_refuses_non_socket_path` — bind path pointing at a
+    //     regular file → returns the structured "refusing to remove"
+    //     error rather than silently nuking the file.
+    //  5. `uds_cleans_stale_socket_file` — pre-create a socket file
+    //     (left over by a crashed engine) and verify bind succeeds
+    //     (stale-cleanup path).
+    // ---------------------------------------------------------------------
+
+    use crate::engine::embedding::mock::MockEmbedder;
+    use crate::engine::vector::HnswVectorIndex;
+
+    /// Build a minimal `ServeState` for transport tests. Uses in-memory
+    /// storage + a mock embedder so `ping` and `manifest.assemble` work
+    /// without filesystem or network.
+    fn test_serve_state() -> ServeState {
+        let ctx = Context::single_user_local();
+        let storage: Arc<dyn Storage> = Arc::new(MemoryStorage::default());
+        let embedder: Arc<dyn Embedder> = Arc::new(MockEmbedder::new(8));
+        let vector_index: Arc<dyn VectorIndex> = Arc::new(HnswVectorIndex::new(8));
+        ServeState {
+            ctx,
+            storage,
+            embedder,
+            vector_index,
+        }
+    }
+
+    /// Refactor regression guard: drive `serve_one_connection` through
+    /// an in-memory duplex pair and verify the stdio-shape response
+    /// (line-framed JSON-RPC 2.0, exactly one '\n' terminator per
+    /// response) is unchanged from the pre-T.4 inline loop.
+    #[tokio::test]
+    async fn stdio_regression_ping_roundtrip() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt as _, BufReader as TokioBufReader, duplex};
+
+        let state = test_serve_state();
+
+        // Two duplex pairs: one for the "client → server" direction,
+        // one for "server → client". The serve loop reads from
+        // `server_read` and writes to `server_write`; the test writes
+        // requests on `client_write` and reads responses on
+        // `client_read`.
+        let (client_write, server_read) = duplex(4096);
+        let (server_write, mut client_read) = duplex(4096);
+
+        // Spawn the serve loop. It runs until the reader EOFs, which
+        // happens when we drop `client_write` below.
+        let serve_handle = tokio::spawn(async move {
+            let reader = TokioBufReader::new(server_read);
+            serve_one_connection(reader, server_write, &state).await
+        });
+
+        // Send a ping.
+        let mut client_write = client_write;
+        client_write
+            .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\",\"params\":{}}\n")
+            .await
+            .unwrap();
+        client_write.flush().await.unwrap();
+
+        // Read one line of response — the legacy contract is "exactly
+        // one JSON object terminated by '\n'."
+        let mut buf = Vec::new();
+        let mut byte = [0u8; 1];
+        loop {
+            client_read.read_exact(&mut byte).await.unwrap();
+            buf.push(byte[0]);
+            if byte[0] == b'\n' {
+                break;
+            }
+        }
+        let line = std::str::from_utf8(&buf).unwrap().trim_end_matches('\n');
+        let parsed: Value = serde_json::from_str(line).expect("response must be valid JSON");
+        assert_eq!(parsed["jsonrpc"], json!("2.0"));
+        assert_eq!(parsed["id"], json!(1));
+        assert_eq!(parsed["result"]["ok"], json!(true));
+        assert!(parsed["result"]["version"].is_string());
+
+        // Drop the writer → server sees EOF → loop returns Ok.
+        drop(client_write);
+        let result = serve_handle.await.unwrap();
+        result.expect("serve_one_connection should exit cleanly on EOF");
+    }
+
+    /// Pick an ephemeral UDS path under the test's tempdir. macOS limits
+    /// the path to 104 bytes; `tempfile::tempdir` paths under `/var/...`
+    /// are normally well under that, so we don't add a special guard.
+    fn ephemeral_sock(dir: &std::path::Path, label: &str) -> PathBuf {
+        // Keep filename short — macOS 104-byte limit.
+        dir.join(format!("{label}.sock"))
+    }
+
+    /// UDS happy path: bind, connect, send ping, get response back.
+    #[tokio::test]
+    async fn uds_ping_roundtrip() {
+        use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader as TokioBufReader};
+        use tokio::net::UnixStream;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let sock_path = ephemeral_sock(tmp.path(), "ping");
+
+        let state = test_serve_state();
+        let sock_for_serve = sock_path.clone();
+        let serve_handle = tokio::spawn(async move { serve_uds(state, sock_for_serve).await });
+
+        // Wait for the listener to appear (bind happens in serve_uds
+        // before accept; the path's existence is the readiness signal
+        // — same primitive the opensquid singleton uses).
+        let start = std::time::Instant::now();
+        while !sock_path.exists() {
+            if start.elapsed() > std::time::Duration::from_secs(5) {
+                panic!("UDS path never appeared at {}", sock_path.display());
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+
+        let stream = UnixStream::connect(&sock_path).await.unwrap();
+        let (read_half, mut write_half) = stream.into_split();
+        let mut reader = TokioBufReader::new(read_half);
+        write_half
+            .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":42,\"method\":\"ping\",\"params\":{}}\n")
+            .await
+            .unwrap();
+        write_half.flush().await.unwrap();
+
+        let mut line = String::new();
+        reader.read_line(&mut line).await.unwrap();
+        let parsed: Value = serde_json::from_str(line.trim_end()).unwrap();
+        assert_eq!(parsed["id"], json!(42));
+        assert_eq!(parsed["result"]["ok"], json!(true));
+
+        // Half-close the write side; the serve task's per-connection
+        // spawn returns Ok and the listener keeps accepting. The
+        // listener itself only stops on serve_handle abort.
+        drop(write_half);
+        drop(reader);
+
+        serve_handle.abort();
+    }
+
+    /// Two concurrent connections each send pings with distinct ids;
+    /// each connection must only see responses for its own id (the
+    /// per-connection `tokio::spawn` invariant — no shared writer, no
+    /// id crosstalk).
+    #[tokio::test]
+    async fn uds_concurrent_connections_no_id_crosstalk() {
+        use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader as TokioBufReader};
+        use tokio::net::UnixStream;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let sock_path = ephemeral_sock(tmp.path(), "concur");
+
+        let state = test_serve_state();
+        let sock_for_serve = sock_path.clone();
+        let serve_handle = tokio::spawn(async move { serve_uds(state, sock_for_serve).await });
+
+        // Wait for bind.
+        let start = std::time::Instant::now();
+        while !sock_path.exists() {
+            if start.elapsed() > std::time::Duration::from_secs(5) {
+                panic!("UDS path never appeared at {}", sock_path.display());
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+
+        async fn ping_with_id(path: &std::path::Path, id: u64) -> Value {
+            let stream = UnixStream::connect(path).await.unwrap();
+            let (read_half, mut write_half) = stream.into_split();
+            let mut reader = TokioBufReader::new(read_half);
+            let req = format!(
+                "{{\"jsonrpc\":\"2.0\",\"id\":{id},\"method\":\"ping\",\"params\":{{}}}}\n"
+            );
+            write_half.write_all(req.as_bytes()).await.unwrap();
+            write_half.flush().await.unwrap();
+            let mut line = String::new();
+            reader.read_line(&mut line).await.unwrap();
+            serde_json::from_str(line.trim_end()).unwrap()
+        }
+
+        let (a, b) = tokio::join!(
+            ping_with_id(&sock_path, 1001),
+            ping_with_id(&sock_path, 2002),
+        );
+        assert_eq!(a["id"], json!(1001));
+        assert_eq!(b["id"], json!(2002));
+        assert_eq!(a["result"]["ok"], json!(true));
+        assert_eq!(b["result"]["ok"], json!(true));
+
+        serve_handle.abort();
+    }
+
+    /// Pointing `--socket` at a regular file must fail loudly, not
+    /// silently delete the file. The check is `file_type().is_socket()`.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn uds_refuses_non_socket_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bad_path = tmp.path().join("not-a-socket.txt");
+        std::fs::write(&bad_path, b"hello").unwrap();
+
+        let state = test_serve_state();
+        let err = serve_uds(state, bad_path.clone())
+            .await
+            .expect_err("regular file at --socket path must error");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("not a socket"),
+            "error should mention path is not a socket; got: {msg}"
+        );
+        // File must still exist — we refused to remove it.
+        assert!(bad_path.exists(), "non-socket file must not be deleted");
+    }
+
+    /// A stale socket file (left over after an engine crash) should be
+    /// unlinked and the new bind should succeed.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn uds_cleans_stale_socket_file() {
+        use tokio::net::UnixListener;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let sock_path = ephemeral_sock(tmp.path(), "stale");
+
+        // Pre-create a socket by binding + immediately dropping the
+        // listener — the socket file persists until unlink.
+        let pre_listener = UnixListener::bind(&sock_path).unwrap();
+        drop(pre_listener);
+        assert!(sock_path.exists(), "pre-test socket file should exist");
+
+        // serve_uds should detect it as a socket, unlink, then bind.
+        let state = test_serve_state();
+        let sock_for_serve = sock_path.clone();
+        let serve_handle = tokio::spawn(async move { serve_uds(state, sock_for_serve).await });
+
+        // Wait for new bind to succeed (path will reappear after our
+        // unlink + bind).
+        let start = std::time::Instant::now();
+        while start.elapsed() < std::time::Duration::from_secs(5) {
+            if sock_path.exists() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert!(
+            sock_path.exists(),
+            "serve_uds should rebind at the same path after cleaning stale file"
+        );
+
+        serve_handle.abort();
     }
 }

@@ -48,18 +48,18 @@ fn dispatch(cli: Cli) -> Result<ExitCode> {
         }
         Command::Status => status(),
         Command::Stop => stop(),
-        Command::Serve => serve(),
+        Command::Serve { socket } => serve(socket),
     }
 }
 
-fn serve() -> Result<ExitCode> {
+fn serve(socket: Option<std::path::PathBuf>) -> Result<ExitCode> {
     // Init logging to stderr so JSON-RPC stdout stays clean.
     observability::init_foreground()?;
     paths::ensure_loop_dirs()?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
-    runtime.block_on(loop_engine::serve::run())?;
+    runtime.block_on(loop_engine::serve::run(socket))?;
     Ok(ExitCode::SUCCESS)
 }
 
