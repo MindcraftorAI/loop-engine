@@ -749,13 +749,23 @@ async fn lesson_promote(
         return Err(DispatchError::NotFound(p.id));
     }
     match promote(ctx, storage, &p.id, &PromotionConfig::default(), Utc::now()).await {
-        Ok(loaded) => Ok(json!({
-            "ok": true,
-            "id": p.id,
-            "gate": "passed",
-            "status": "promoted",
-            "from": loaded.status_dir,
-        })),
+        Ok(loaded) => {
+            // Surface the promoted lesson's cited MEMORY ids (the
+            // `EvidenceRef::Memory` evidence refs). A host uses these to
+            // nominate the cited memories as compression candidates —
+            // compression rides the SAME wedge cadence (compression =
+            // lesson-formation). Quote evidence refs are excluded; only
+            // typed memory references are relevant.
+            let cited_memory_ids = cited_memory_ids(loaded.frontmatter.causal_narrative.as_ref());
+            Ok(json!({
+                "ok": true,
+                "id": p.id,
+                "gate": "passed",
+                "status": "promoted",
+                "from": loaded.status_dir,
+                "cited_memory_ids": cited_memory_ids,
+            }))
+        }
         Err(EngineError::PromotionBlocked { reasons }) => Err(DispatchError::PromotionBlocked(
             reasons.iter().map(|r| r.to_string()).collect(),
         )),
@@ -1006,6 +1016,24 @@ fn authorship_str(a: Authorship) -> &'static str {
         Authorship::Pack => "pack",
         _ => "agent",
     }
+}
+
+/// Extract the cited MEMORY ids from a lesson's causal narrative — the
+/// `EvidenceRef::Memory` evidence refs (typed memory references), in
+/// order. `Quote` refs are skipped; `None` narrative → empty. A host
+/// uses these to nominate the cited memories as compression candidates.
+fn cited_memory_ids(narrative: Option<&crate::engine::yaml::CausalNarrative>) -> Vec<String> {
+    narrative
+        .map(|cn| {
+            cn.evidence_refs
+                .iter()
+                .filter_map(|r| match r {
+                    crate::engine::yaml::EvidenceRef::Memory(id) => Some(id.as_str().to_string()),
+                    crate::engine::yaml::EvidenceRef::Quote(_) => None,
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Build a minimal CausalNarrative when evidence is provided. Without
@@ -2045,6 +2073,34 @@ mod tests {
             }
             other => panic!("expected InvalidParams, got: {other:?}"),
         }
+    }
+
+    #[test]
+    fn cited_memory_ids_extracts_only_memory_refs_in_order() {
+        // build_narrative maps `mem-`-prefixed evidence to
+        // EvidenceRef::Memory, everything else to Quote.
+        let narrative = build_narrative(
+            &[
+                "mem-aaa00001".to_string(),
+                "a free-text quote".to_string(),
+                "mem-bbb00002".to_string(),
+            ],
+            Authorship::User,
+            "2026-05-27T00:00:00Z",
+        );
+        let ids = cited_memory_ids(narrative.as_ref());
+        assert_eq!(ids, vec!["mem-aaa00001", "mem-bbb00002"]);
+    }
+
+    #[test]
+    fn cited_memory_ids_empty_for_no_narrative_or_no_memory_refs() {
+        assert!(cited_memory_ids(None).is_empty());
+        let quotes_only = build_narrative(
+            &["just a quote".to_string()],
+            Authorship::User,
+            "2026-05-27T00:00:00Z",
+        );
+        assert!(cited_memory_ids(quotes_only.as_ref()).is_empty());
     }
 
     // ---------------------------------------------------------------------
