@@ -359,8 +359,17 @@ pub async fn consolidate(
     //    the predecessors still exist at this point (compress does not
     //    delete), so the query naturally returns the predecessor too;
     //    we only assert Mc's PRESENCE in the top-k, not its rank.
-    let mut verified = true;
+    //
+    //    `recall_k == 0` means "Mc must be within the top-0", which is
+    //    impossible to satisfy — short-circuit to fail-closed (the gate
+    //    can never pass, and a 0 must not slip through the vector
+    //    index's tombstone over-fetch which can return hits even for
+    //    k=0 after earlier deletions left tombstones).
+    let mut verified = recall_k > 0;
     for pid in &predecessor_ids {
+        if !verified {
+            break;
+        }
         let pred = match get_by_id(ctx, storage, pid).await {
             Ok(Some(m)) => m,
             // Predecessor vanished or unreadable → cannot prove recall
@@ -1190,6 +1199,52 @@ mod tests {
         );
         assert!(
             get_by_id(&ctx(), storage.as_ref(), &m2)
+                .await
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn consolidate_recall_k_zero_is_fail_closed() {
+        // recall_k = 0 can never verify (Mc in top-0 is impossible) →
+        // fail-closed regardless of how recall would rank. Guards the
+        // vector-index tombstone over-fetch quirk from leaking a pass.
+        let storage: Arc<dyn Storage> = Arc::new(MemoryStorage::default());
+        let vector_index = HnswVectorIndex::new(4);
+        let m1 = seed_at(
+            &storage,
+            &vector_index,
+            "mem-zk000001",
+            "alpha",
+            "a",
+            unit_vec(4, 0),
+        )
+        .await;
+        let llm = MockLlmClient::default().with_response(success_generation(
+            r#"{"description": "merged", "content": "compressed"}"#,
+        ));
+        let embedder = MockEmbedder::new(4)
+            .with_response(vec![unit_vec(4, 0)]) // Mc colinear (would pass at k>=1)
+            .with_response(vec![unit_vec(4, 0)]); // recall query (never consulted)
+        let out = consolidate(
+            &ctx(),
+            storage.as_ref(),
+            &llm,
+            &embedder,
+            &vector_index,
+            vec![m1.clone()],
+            &CompressionConfig::default(),
+            0, // recall_k = 0
+            now_t(),
+        )
+        .await
+        .unwrap();
+        assert!(!out.verified, "k=0 must fail closed");
+        assert!(out.deleted.is_empty());
+        assert!(out.mc_id.is_some());
+        assert!(
+            get_by_id(&ctx(), storage.as_ref(), &m1)
                 .await
                 .unwrap()
                 .is_some()
