@@ -28,10 +28,12 @@ use async_trait::async_trait;
 
 pub mod error;
 pub mod mock;
+pub mod openai_compatible;
 pub mod request;
 pub mod response;
 
 pub use error::LlmError;
+pub use openai_compatible::OpenAiCompatibleLlm;
 pub use request::{GenerateRequest, ResponseFormat};
 pub use response::{FinishReason, Generation, TokenUsage};
 

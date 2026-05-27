@@ -55,7 +55,7 @@ use crate::engine::lessons::transitions::{
     FeedbackPolarity, capture_feedback as transitions_capture_feedback, discard, promote,
     supersede as transitions_supersede,
 };
-use crate::engine::llm::LlmClient;
+use crate::engine::llm::{LlmClient, OpenAiCompatibleLlm};
 use crate::engine::memory::{
     CompressionConfig, CompressionWindow, MemoryId, MemoryOrigin, MemoryQuery, MemoryScope,
     MemoryScopeFilter, compress as memory_compress_fn, delete as memory_delete,
@@ -162,13 +162,12 @@ pub struct ServeState {
     embedder: Arc<dyn Embedder>,
     vector_index: Arc<dyn VectorIndex>,
     /// Optional LLM client for handlers that need generation (today:
-    /// `memory.compress`). `None` when no production adapter is
-    /// configured — the engine crate ships only `MockLlmClient`
-    /// (behind `test-fixtures`); production adapters land in the
-    /// monolith crate per the engine/monolith split. Handlers that
-    /// require an LLM return a clear dispatch error when it is absent
-    /// rather than panicking, so the rest of the RPC surface stays
-    /// available on an LLM-less daemon.
+    /// `memory.compress`). Built from env in [`build_state`]
+    /// (`OpenAiCompatibleLlm::from_env`, defaulting to local Ollama).
+    /// `None` only when construction fails (misconfiguration) or a test
+    /// builds an LLM-less state — handlers that require an LLM then
+    /// return a clear dispatch error rather than panicking, so the rest
+    /// of the RPC surface stays available.
     llm: Option<Arc<dyn LlmClient>>,
 }
 
@@ -224,18 +223,29 @@ async fn build_state() -> Result<ServeState> {
         }
     }
 
+    // LLM client for handlers that need generation (today:
+    // `memory.compress`). Mirrors the embedder's `from_env` — defaults
+    // to local Ollama (`OPENSQUID_LLM_*` overrides). Construction is
+    // config-only (no network), so a failure here is a genuine
+    // misconfiguration; we log + continue with `None` so the rest of the
+    // RPC surface stays available (memory.compress alone degrades to a
+    // clear "no LLM configured" error).
+    let llm: Option<Arc<dyn LlmClient>> = match OpenAiCompatibleLlm::from_env() {
+        Ok(client) => Some(Arc::new(client)),
+        Err(e) => {
+            eprintln!(
+                "[loop-engine serve] LLM adapter unavailable (memory.compress disabled): {e}"
+            );
+            None
+        }
+    };
+
     Ok(ServeState {
         ctx,
         storage,
         embedder,
         vector_index,
-        // No production LLM adapter ships in the engine crate — the
-        // sealed `LlmClient` trait is satisfied only by `MockLlmClient`
-        // (test-fixtures) today; real adapters land in the monolith
-        // crate. A daemon built from this crate therefore has no LLM,
-        // and `memory.compress` returns `Other("...no LLM configured")`
-        // until an adapter is wired. Every other RPC is unaffected.
-        llm: None,
+        llm,
     })
 }
 
