@@ -31,6 +31,7 @@
 //! - `memory.get`        — fetch a memory by id (returns FULL content + scope + origin)
 //! - `memory.update`     — mutate description/content/scope; re-embeds on content change
 //! - `memory.delete`     — `forget` (force=true required to bypass user-immunity)
+//! - `memory.consolidate` — atomic safe-compression: compress → recall-replay verify → gated delete
 //!
 //! Manifest assembly + skill/persona/team ops land in a follow-on
 //! serve cycle.
@@ -57,10 +58,10 @@ use crate::engine::lessons::transitions::{
 };
 use crate::engine::llm::{LlmClient, OpenAiCompatibleLlm};
 use crate::engine::memory::{
-    CompressionConfig, CompressionWindow, MemoryId, MemoryOrigin, MemoryQuery, MemoryScope,
-    MemoryScopeFilter, compress as memory_compress_fn, delete as memory_delete,
-    get_by_id as memory_get_by_id, hybrid_search as memory_hybrid_search,
-    insert_with_provenance as memory_insert_with_provenance,
+    CompressionConfig, CompressionWindow, DEFAULT_CONSOLIDATE_RECALL_K, MemoryId, MemoryOrigin,
+    MemoryQuery, MemoryScope, MemoryScopeFilter, compress as memory_compress_fn,
+    consolidate as memory_consolidate_fn, delete as memory_delete, get_by_id as memory_get_by_id,
+    hybrid_search as memory_hybrid_search, insert_with_provenance as memory_insert_with_provenance,
     recompute_citation_counts as memory_recompute_citation_counts, rehydrate_vector_index,
     search as memory_search, text_search as memory_text_search, update as memory_update,
 };
@@ -484,6 +485,9 @@ async fn dispatch(
         "memory.delete" => memory_delete_method(params, ctx, storage, vector_index).await,
         "memory.compress" => {
             memory_compress_method(params, ctx, storage, embedder, vector_index, llm).await
+        }
+        "memory.consolidate" => {
+            memory_consolidate_method(params, ctx, storage, embedder, vector_index, llm).await
         }
         "memory.recompute_citations" => {
             memory_recompute_citations_method(params, ctx, storage).await
@@ -1667,6 +1671,107 @@ async fn memory_compress_method(
     }
 }
 
+#[derive(Deserialize)]
+struct MemoryConsolidateParams {
+    /// Explicit window — the memory ids to consolidate. The host
+    /// decides the window (satisfaction probe + candidate collection);
+    /// the engine never auto-selects.
+    ids: Vec<String>,
+    /// Max LLM output tokens for the compression step. Defaults to
+    /// `CompressionConfig::default`.
+    #[serde(default)]
+    max_tokens: Option<usize>,
+    /// Sampling temperature for the compression step. Defaults to
+    /// `CompressionConfig::default`.
+    #[serde(default)]
+    temperature: Option<f32>,
+    /// Recall-replay top-k. The compressed memory must surface within
+    /// the top-`recall_k` for EACH predecessor's representative query.
+    /// Defaults to [`DEFAULT_CONSOLIDATE_RECALL_K`].
+    #[serde(default)]
+    recall_k: Option<usize>,
+}
+
+/// `memory.consolidate` — the atomic, fail-closed safe-compression op
+/// (universal memory integrity). Compresses the window into one
+/// summary `Mc`, VERIFIES via recall-replay that `Mc` preserves each
+/// predecessor's recall, and ONLY THEN force-deletes the NON-immune
+/// predecessors (user-cited ones are kept). Any error or verify-miss
+/// → deletes NOTHING and returns `verified: false` with the minted
+/// `Mc` id so the host can keep `Mc` alongside the originals + emit a
+/// drift event.
+///
+/// This is the engine-side home of the D2 safety contract (verify +
+/// immunity + fail-closed) — previously enforced across multiple
+/// host RPC round-trips, now race-free inside one engine call.
+///
+/// Requires an LLM (compression step). Wire result:
+/// `{ mc_id, deleted: [...], kept_immune: [...], verified: bool }`.
+///
+/// [`consolidate`]: crate::engine::memory::consolidate
+async fn memory_consolidate_method(
+    params: Value,
+    ctx: &Context,
+    storage: &dyn Storage,
+    embedder: &dyn Embedder,
+    vector_index: &dyn VectorIndex,
+    llm: Option<&dyn LlmClient>,
+) -> std::result::Result<Value, DispatchError> {
+    let p: MemoryConsolidateParams =
+        serde_json::from_value(params).map_err(|e| DispatchError::InvalidParams(e.to_string()))?;
+    if p.ids.is_empty() {
+        return Err(DispatchError::InvalidParams(
+            "ids required (non-empty)".into(),
+        ));
+    }
+    let llm = llm.ok_or_else(|| {
+        DispatchError::Other(anyhow!(
+            "memory.consolidate requires an LLM adapter, but none is configured on this engine"
+        ))
+    })?;
+
+    let ids: Vec<MemoryId> = p.ids.iter().map(|s| MemoryId::new(s.as_str())).collect();
+    let mut config = CompressionConfig::default();
+    if let Some(mt) = p.max_tokens {
+        config.max_tokens = mt;
+    }
+    if let Some(t) = p.temperature {
+        config.temperature = t;
+    }
+    let recall_k = p.recall_k.unwrap_or(DEFAULT_CONSOLIDATE_RECALL_K);
+
+    match memory_consolidate_fn(
+        ctx,
+        storage,
+        llm,
+        embedder,
+        vector_index,
+        ids,
+        &config,
+        recall_k,
+        Utc::now(),
+    )
+    .await
+    {
+        Ok(outcome) => Ok(json!({
+            "mc_id": outcome.mc_id,
+            "deleted": outcome.deleted,
+            "kept_immune": outcome.kept_immune,
+            "verified": outcome.verified,
+        })),
+        // The window was too thin/contradictory to summarize, OR
+        // resolved empty — a graceful no-op signal, not a defect.
+        // Surface as InvalidParams so the host skips the window without
+        // treating it as an engine fault. (Mirrors memory.compress.)
+        Err(EngineError::CompressionInsufficientInput) => Err(DispatchError::InvalidParams(
+            "consolidation refused: insufficient input for the supplied window".into(),
+        )),
+        Err(e) => Err(DispatchError::Other(anyhow!(
+            "memory.consolidate failed: {e}"
+        ))),
+    }
+}
+
 /// `memory.recompute_citations` — pure exposure of
 /// [`recompute_citation_counts`]. Walks all lessons + the
 /// predecessor→compressor index, repairs every memory's
@@ -2277,6 +2382,208 @@ mod tests {
         assert_eq!(result["counters_repaired"], json!(0));
         assert_eq!(result["orphan_citations"], json!(0));
         assert!(result["lessons_scanned"].is_number());
+    }
+
+    // ---------------------------------------------------------------------
+    // CMP.4 (revised) — `memory.consolidate` dispatch arm. The atomic
+    // verify+gated-delete op now lives in the engine. These tests drive
+    // it through `dispatch()` and assert the D2 contract end-to-end:
+    // verified → non-immune deleted / immune kept; verify-miss →
+    // fail-closed (delete nothing, verified:false).
+    // ---------------------------------------------------------------------
+
+    /// Seed a memory at a chosen embedding vector (one-shot embedder per
+    /// insert so the index entry is exactly that vector).
+    async fn seed_at(
+        storage: &Arc<dyn Storage>,
+        vector_index: &HnswVectorIndex,
+        id: &str,
+        desc: &str,
+        body: &str,
+        vec: Vec<f32>,
+    ) {
+        let emb = MockEmbedder::new(4).with_response(vec![vec]);
+        crate::engine::memory::store::insert(
+            &Context::single_user_local(),
+            storage.as_ref(),
+            &emb,
+            vector_index,
+            MemoryId::new(id),
+            desc,
+            body,
+            Utc::now(),
+        )
+        .await
+        .expect("seed insert");
+    }
+
+    fn axis(dim: usize, ax: usize) -> Vec<f32> {
+        let mut v = vec![0.0_f32; dim];
+        v[ax] = 1.0;
+        v
+    }
+
+    #[tokio::test]
+    async fn memory_consolidate_dispatch_verified_deletes_non_immune() {
+        use crate::engine::llm::{Generation, MockLlmClient};
+
+        let ctx = Context::single_user_local();
+        let storage: Arc<dyn Storage> = Arc::new(MemoryStorage::default());
+        let vector_index = HnswVectorIndex::new(4);
+        seed_at(
+            &storage,
+            &vector_index,
+            "mem-cns00001",
+            "alpha",
+            "a",
+            axis(4, 0),
+        )
+        .await;
+        seed_at(
+            &storage,
+            &vector_index,
+            "mem-cns00002",
+            "beta",
+            "b",
+            axis(4, 0),
+        )
+        .await;
+
+        let llm = MockLlmClient::default().with_response(
+            Generation::new(r#"{"description":"gist","content":"compressed"}"#).with_parsed(
+                serde_json::from_str(r#"{"description":"gist","content":"compressed"}"#).unwrap(),
+            ),
+        );
+        // Mc colinear with predecessors; recall queries colinear too →
+        // Mc surfaces → verified.
+        let embedder = MockEmbedder::new(4)
+            .with_response(vec![axis(4, 0)])
+            .with_response(vec![axis(4, 0)])
+            .with_response(vec![axis(4, 0)]);
+
+        let result = dispatch(
+            "memory.consolidate",
+            json!({ "ids": ["mem-cns00001", "mem-cns00002"] }),
+            &ctx,
+            storage.as_ref(),
+            &embedder,
+            &vector_index,
+            Some(&llm),
+        )
+        .await
+        .expect("memory.consolidate should succeed via dispatch");
+
+        assert_eq!(result["verified"], json!(true));
+        let mut deleted: Vec<String> = result["deleted"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect();
+        deleted.sort();
+        assert_eq!(deleted, vec!["mem-cns00001", "mem-cns00002"]);
+        assert!(result["kept_immune"].as_array().unwrap().is_empty());
+        assert!(result["mc_id"].as_str().unwrap().starts_with("mem-c-"));
+    }
+
+    #[tokio::test]
+    async fn memory_consolidate_dispatch_verify_fail_deletes_nothing() {
+        use crate::engine::llm::{Generation, MockLlmClient};
+
+        let ctx = Context::single_user_local();
+        let storage: Arc<dyn Storage> = Arc::new(MemoryStorage::default());
+        let vector_index = HnswVectorIndex::new(4);
+        seed_at(
+            &storage,
+            &vector_index,
+            "mem-cnf00001",
+            "alpha",
+            "a",
+            axis(4, 0),
+        )
+        .await;
+        seed_at(
+            &storage,
+            &vector_index,
+            "mem-cnf00002",
+            "beta",
+            "b",
+            axis(4, 0),
+        )
+        .await;
+
+        let llm = MockLlmClient::default().with_response(
+            Generation::new(r#"{"description":"gist","content":"compressed"}"#).with_parsed(
+                serde_json::from_str(r#"{"description":"gist","content":"compressed"}"#).unwrap(),
+            ),
+        );
+        // Mc orthogonal; recall_k=1 → Mc not the top hit → verify miss.
+        let embedder = MockEmbedder::new(4)
+            .with_response(vec![axis(4, 1)])
+            .with_response(vec![axis(4, 0)]);
+
+        let result = dispatch(
+            "memory.consolidate",
+            json!({ "ids": ["mem-cnf00001", "mem-cnf00002"], "recall_k": 1 }),
+            &ctx,
+            storage.as_ref(),
+            &embedder,
+            &vector_index,
+            Some(&llm),
+        )
+        .await
+        .expect("dispatch returns Ok with verified:false (not an error)");
+
+        assert_eq!(result["verified"], json!(false));
+        assert!(result["deleted"].as_array().unwrap().is_empty());
+        assert!(result["kept_immune"].as_array().unwrap().is_empty());
+        assert!(result["mc_id"].as_str().unwrap().starts_with("mem-c-"));
+    }
+
+    #[tokio::test]
+    async fn memory_consolidate_dispatch_missing_ids_is_invalid_params() {
+        let ctx = Context::single_user_local();
+        let storage: Arc<dyn Storage> = Arc::new(MemoryStorage::default());
+        let vector_index = HnswVectorIndex::new(4);
+        let embedder = MockEmbedder::new(4);
+        let err = dispatch(
+            "memory.consolidate",
+            json!({}),
+            &ctx,
+            storage.as_ref(),
+            &embedder,
+            &vector_index,
+            None,
+        )
+        .await
+        .expect_err("missing ids must fail");
+        assert!(matches!(err, DispatchError::InvalidParams(_)));
+    }
+
+    #[tokio::test]
+    async fn memory_consolidate_dispatch_without_llm_errors_clearly() {
+        let ctx = Context::single_user_local();
+        let storage: Arc<dyn Storage> = Arc::new(MemoryStorage::default());
+        let vector_index = HnswVectorIndex::new(4);
+        let embedder = MockEmbedder::new(4);
+        let err = dispatch(
+            "memory.consolidate",
+            json!({ "ids": ["mem-cns00001"] }),
+            &ctx,
+            storage.as_ref(),
+            &embedder,
+            &vector_index,
+            None,
+        )
+        .await
+        .expect_err("no LLM configured must fail");
+        match err {
+            DispatchError::Other(e) => assert!(
+                e.to_string().contains("LLM"),
+                "error should name the missing LLM: {e}"
+            ),
+            other => panic!("expected Other(no-LLM), got {other:?}"),
+        }
     }
 
     #[test]
