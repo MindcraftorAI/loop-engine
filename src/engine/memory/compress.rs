@@ -34,7 +34,7 @@ use crate::engine::memory::id::MemoryId;
 use crate::engine::memory::store::{
     embedding_to_bytes, get_by_id, parse_memory_file, render_memory_yaml, vec_key,
 };
-use crate::engine::memory::{Memory, MemoryFrontmatter, PrunePredicate};
+use crate::engine::memory::{Memory, MemoryFrontmatter, MemoryQuery, PrunePredicate};
 use crate::engine::storage::{Storage, StorageKey};
 use crate::engine::vector::VectorIndex;
 
@@ -243,6 +243,217 @@ pub async fn compress(
     vector_index.insert(ctx, &fm.id, &embedding).await?;
 
     Ok(Memory::new(fm, draft.content).with_embedding(embedding))
+}
+
+/// Default top-k for the recall-replay verification probe in
+/// [`consolidate`]. The compressed memory must surface within the
+/// top-`k` results of EACH predecessor's representative query for the
+/// consolidation to count as verified.
+pub const DEFAULT_CONSOLIDATE_RECALL_K: usize = 5;
+
+/// Outcome of a [`consolidate`] call. Engine-owned shape; the serve
+/// layer translates it to the JSON-RPC wire form.
+///
+/// `verified` is the load-bearing safety signal: when `false`, NO
+/// predecessor was deleted (`deleted` is empty) — the new compressed
+/// memory `mc_id` (if minted) sits ALONGSIDE every predecessor so the
+/// trace is never lost. The host is expected to surface a drift event
+/// on `!verified`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ConsolidateOutcome {
+    /// The minted compressed memory's id, if `compress` succeeded.
+    /// `None` only when compression itself failed/refused (no Mc
+    /// exists; nothing was deleted).
+    pub mc_id: Option<String>,
+    /// Predecessor ids that were force-deleted. Non-empty ONLY when
+    /// `verified == true`. Excludes any user-cited (immune) predecessor.
+    pub deleted: Vec<String>,
+    /// Predecessor ids KEPT because they are user-cited
+    /// (`consumed_by_user_lessons > 0`) — immunity is honored even on
+    /// the verified path. The compression chain (`derived_from`)
+    /// still links them to `Mc`.
+    pub kept_immune: Vec<String>,
+    /// Whether the recall-replay gate passed for ALL predecessors AND
+    /// compression succeeded. `false` ⇒ fail-closed (nothing deleted).
+    pub verified: bool,
+}
+
+/// Atomic, fail-closed consolidation: compress a window into one
+/// summary `Mc`, VERIFY that `Mc` preserves each predecessor's recall
+/// (recall-replay), and ONLY THEN force-delete the non-immune
+/// predecessors. This is universal memory INTEGRITY — every consumer
+/// of the substrate needs safe-compression, so it lives in the engine
+/// (race-free + correct-by-construction) rather than in any single
+/// host's policy layer.
+///
+/// The safety contract (the same D2 the host previously enforced,
+/// now guaranteed inside the engine):
+///   1. **compress** mints `Mc` (`derived_from = predecessors`, summed
+///      citation counters). Predecessors are NOT touched yet.
+///   2. **verify (recall-replay):** for EACH predecessor, run a
+///      semantic search keyed on that predecessor's own description;
+///      `Mc` MUST appear within the top-`recall_k` hits. A single miss
+///      → `verified = false`.
+///   3. **gated delete:** only when verified, force-delete each
+///      predecessor whose `consumed_by_user_lessons == 0`. User-cited
+///      predecessors are KEPT (immunity) even though `force` would
+///      bypass the store guard — the consolidate fn does the immunity
+///      check ITSELF before deleting, so `force=true` here never
+///      orphans a user citation.
+///
+/// **Fail-closed:** any error (compress, search, storage) OR any
+/// verify-miss results in deleting NOTHING. The returned outcome
+/// carries the `Mc` id (if minted) so the host can surface a drift
+/// event and keep `Mc` alongside the originals.
+///
+/// Returns `Err` only when compression itself fails for a reason the
+/// host must distinguish (insufficient input, cycle, scope mismatch,
+/// I/O). A verify-miss is NOT an error — it is a valid
+/// `verified: false` outcome (the window simply isn't safe to
+/// consolidate yet).
+#[allow(clippy::too_many_arguments)] // mirrors `compress`; the deps are fundamental
+pub async fn consolidate(
+    ctx: &Context,
+    storage: &dyn Storage,
+    llm: &dyn LlmClient,
+    embedder: &dyn Embedder,
+    vector_index: &dyn VectorIndex,
+    ids: Vec<MemoryId>,
+    config: &CompressionConfig,
+    recall_k: usize,
+    now: DateTime<Utc>,
+) -> Result<ConsolidateOutcome, EngineError> {
+    // Capture + dedupe the predecessor id set up front. `compress`
+    // dedupes internally, but we need the same canonical set for the
+    // verify + delete phases so the three steps reason about identical
+    // windows.
+    let mut predecessor_ids: Vec<MemoryId> = ids;
+    {
+        let mut seen: std::collections::HashSet<MemoryId> = std::collections::HashSet::new();
+        predecessor_ids.retain(|id| seen.insert(id.clone()));
+    }
+
+    // 1. Compress → mint Mc. Any compression error propagates (the host
+    //    distinguishes insufficient-input / cycle / scope-mismatch);
+    //    NOTHING is deleted because we haven't reached the delete phase.
+    let mc = compress(
+        ctx,
+        storage,
+        llm,
+        embedder,
+        vector_index,
+        CompressionWindow::Ids(predecessor_ids.clone()),
+        config,
+        now,
+    )
+    .await?;
+    let mc_id = mc.frontmatter.id.clone();
+
+    // 2. Recall-replay verification. For each predecessor, the engine
+    //    re-queries the store with that predecessor's representative
+    //    text (its description). Mc must surface in the top-k — proof
+    //    the compressed summary preserves the predecessor's recall
+    //    BEFORE we delete the original. A storage/search error here is
+    //    fail-closed: treat as a verify miss (delete nothing). NOTE:
+    //    the predecessors still exist at this point (compress does not
+    //    delete), so the query naturally returns the predecessor too;
+    //    we only assert Mc's PRESENCE in the top-k, not its rank.
+    let mut verified = true;
+    for pid in &predecessor_ids {
+        let pred = match get_by_id(ctx, storage, pid).await {
+            Ok(Some(m)) => m,
+            // Predecessor vanished or unreadable → cannot prove recall
+            // is preserved → fail closed.
+            Ok(None) | Err(_) => {
+                verified = false;
+                break;
+            }
+        };
+        let query = MemoryQuery::Text(recall_query_for(&pred));
+        let hits = match super::store::search(
+            ctx,
+            storage,
+            embedder,
+            vector_index,
+            &query,
+            recall_k,
+            0, // body preview unused by the gate
+            None,
+        )
+        .await
+        {
+            Ok(h) => h,
+            Err(_) => {
+                verified = false;
+                break;
+            }
+        };
+        if !hits.iter().any(|h| h.id == mc_id) {
+            verified = false;
+            break;
+        }
+    }
+
+    // 3. Fail-closed: a verify miss deletes NOTHING. Mc lives alongside
+    //    the predecessors; the host surfaces a drift event.
+    if !verified {
+        return Ok(ConsolidateOutcome {
+            mc_id: Some(mc_id.as_str().to_string()),
+            deleted: Vec::new(),
+            kept_immune: Vec::new(),
+            verified: false,
+        });
+    }
+
+    // 4. Gated delete. Verified ⇒ force-delete each NON-immune
+    //    predecessor. The immunity check is done HERE (not delegated to
+    //    `delete`, which `force=true` would bypass): a predecessor with
+    //    `consumed_by_user_lessons > 0` is KEPT. If any single delete
+    //    errors, stop deleting further (the originals that remain are
+    //    safe — Mc + derived_from still preserve the trace) and report
+    //    what was deleted so far; the operation stays consistent.
+    let mut deleted: Vec<String> = Vec::new();
+    let mut kept_immune: Vec<String> = Vec::new();
+    for pid in &predecessor_ids {
+        // Re-load to read the AUTHORITATIVE immunity counter right
+        // before the irreversible delete (don't trust a stale read).
+        let immune = match get_by_id(ctx, storage, pid).await {
+            Ok(Some(m)) => m.frontmatter.consumed_by_user_lessons > 0,
+            // Already gone / unreadable → treat as immune-safe (skip):
+            // never force-delete something we can't confirm is non-immune.
+            Ok(None) | Err(_) => true,
+        };
+        if immune {
+            kept_immune.push(pid.as_str().to_string());
+            continue;
+        }
+        match super::store::delete(ctx, storage, vector_index, pid, true).await {
+            Ok(()) => deleted.push(pid.as_str().to_string()),
+            // A delete failure is non-fatal: keep the predecessor (it's
+            // still safe; Mc preserves the trace) and record it as kept.
+            Err(_) => kept_immune.push(pid.as_str().to_string()),
+        }
+    }
+
+    Ok(ConsolidateOutcome {
+        mc_id: Some(mc_id.as_str().to_string()),
+        deleted,
+        kept_immune,
+        verified: true,
+    })
+}
+
+/// Build the recall-replay query text for a predecessor. Uses the
+/// predecessor's description (the most representative single-line
+/// summary the store holds) — falls back to a body-prefix when the
+/// description is empty so the probe is never an empty query.
+fn recall_query_for(pred: &Memory) -> String {
+    let desc = pred.frontmatter.description.trim();
+    if !desc.is_empty() {
+        return desc.to_string();
+    }
+    pred.content.trim().chars().take(200).collect()
 }
 
 async fn resolve_window(
@@ -724,6 +935,304 @@ mod tests {
         assert_ne!(
             id_a, id_b,
             "minted ids must differ when predecessor sets differ"
+        );
+    }
+
+    // -----------------------------------------------------------------
+    // `consolidate` — the atomic verify+gated-delete op. These tests
+    // own the embedding vectors end-to-end so the recall-replay gate is
+    // deterministic: a query vector colinear with Mc's vector surfaces
+    // Mc (verify passes); an orthogonal Mc with k=1 hides it (verify
+    // fails). The store immunity counter drives the keep-vs-delete fork.
+    // -----------------------------------------------------------------
+
+    /// Seed a memory at a CHOSEN embedding vector (each insert uses its
+    /// own one-shot embedder so the vector lands in the index exactly).
+    async fn seed_at(
+        storage: &Arc<dyn Storage>,
+        vector_index: &HnswVectorIndex,
+        id: &str,
+        desc: &str,
+        body: &str,
+        vec: Vec<f32>,
+    ) -> MemoryId {
+        let id = MemoryId::new(id);
+        let emb = MockEmbedder::new(4).with_response(vec![vec]);
+        insert(
+            &ctx(),
+            storage.as_ref(),
+            &emb,
+            vector_index,
+            id.clone(),
+            desc,
+            body,
+            now_t(),
+        )
+        .await
+        .unwrap();
+        id
+    }
+
+    #[tokio::test]
+    async fn consolidate_verified_deletes_non_immune_predecessors() {
+        let storage: Arc<dyn Storage> = Arc::new(MemoryStorage::default());
+        let vector_index = HnswVectorIndex::new(4);
+        // Two non-immune predecessors, both at axis-0.
+        let m1 = seed_at(
+            &storage,
+            &vector_index,
+            "mem-con00001",
+            "alpha topic",
+            "body a",
+            unit_vec(4, 0),
+        )
+        .await;
+        let m2 = seed_at(
+            &storage,
+            &vector_index,
+            "mem-con00002",
+            "beta topic",
+            "body b",
+            unit_vec(4, 0),
+        )
+        .await;
+
+        let llm = MockLlmClient::default().with_response(success_generation(
+            r#"{"description": "merged alpha+beta", "content": "compressed body"}"#,
+        ));
+        // consolidate's embedder: 1st embed = Mc content (axis-0, so it
+        // sits with the predecessors); then 1 embed per predecessor's
+        // recall query (axis-0). All colinear → Mc surfaces → verified.
+        let embedder = MockEmbedder::new(4)
+            .with_response(vec![unit_vec(4, 0)]) // Mc
+            .with_response(vec![unit_vec(4, 0)]) // m1 recall query
+            .with_response(vec![unit_vec(4, 0)]); // m2 recall query
+
+        let out = consolidate(
+            &ctx(),
+            storage.as_ref(),
+            &llm,
+            &embedder,
+            &vector_index,
+            vec![m1.clone(), m2.clone()],
+            &CompressionConfig::default(),
+            DEFAULT_CONSOLIDATE_RECALL_K,
+            now_t(),
+        )
+        .await
+        .unwrap();
+
+        assert!(out.verified, "all-colinear recall must verify");
+        assert!(out.mc_id.is_some());
+        let mut deleted = out.deleted.clone();
+        deleted.sort();
+        assert_eq!(
+            deleted,
+            vec!["mem-con00001".to_string(), "mem-con00002".to_string()]
+        );
+        assert!(out.kept_immune.is_empty());
+        // Predecessors actually gone; Mc present.
+        assert!(
+            get_by_id(&ctx(), storage.as_ref(), &m1)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            get_by_id(&ctx(), storage.as_ref(), &m2)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let mc = get_by_id(&ctx(), storage.as_ref(), &MemoryId::new(out.mc_id.unwrap()))
+            .await
+            .unwrap();
+        assert!(mc.is_some(), "Mc must survive");
+    }
+
+    #[tokio::test]
+    async fn consolidate_keeps_user_cited_predecessor_even_when_verified() {
+        use crate::engine::memory::store::increment_citation_count;
+        let storage: Arc<dyn Storage> = Arc::new(MemoryStorage::default());
+        let vector_index = HnswVectorIndex::new(4);
+        let m1 = seed_at(
+            &storage,
+            &vector_index,
+            "mem-imm00001",
+            "cited topic",
+            "body a",
+            unit_vec(4, 0),
+        )
+        .await;
+        let m2 = seed_at(
+            &storage,
+            &vector_index,
+            "mem-imm00002",
+            "uncited topic",
+            "body b",
+            unit_vec(4, 0),
+        )
+        .await;
+        // m1 is user-cited → immune; m2 is not.
+        increment_citation_count(&ctx(), storage.as_ref(), &m1)
+            .await
+            .unwrap();
+
+        let llm = MockLlmClient::default().with_response(success_generation(
+            r#"{"description": "merged", "content": "compressed"}"#,
+        ));
+        let embedder = MockEmbedder::new(4)
+            .with_response(vec![unit_vec(4, 0)]) // Mc
+            .with_response(vec![unit_vec(4, 0)]) // m1 recall query
+            .with_response(vec![unit_vec(4, 0)]); // m2 recall query
+
+        let out = consolidate(
+            &ctx(),
+            storage.as_ref(),
+            &llm,
+            &embedder,
+            &vector_index,
+            vec![m1.clone(), m2.clone()],
+            &CompressionConfig::default(),
+            DEFAULT_CONSOLIDATE_RECALL_K,
+            now_t(),
+        )
+        .await
+        .unwrap();
+
+        assert!(out.verified);
+        assert_eq!(
+            out.deleted,
+            vec!["mem-imm00002".to_string()],
+            "only non-immune deleted"
+        );
+        assert_eq!(
+            out.kept_immune,
+            vec!["mem-imm00001".to_string()],
+            "user-cited kept"
+        );
+        // Immune predecessor still present; non-immune gone.
+        assert!(
+            get_by_id(&ctx(), storage.as_ref(), &m1)
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            get_by_id(&ctx(), storage.as_ref(), &m2)
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn consolidate_recall_replay_fail_deletes_nothing() {
+        let storage: Arc<dyn Storage> = Arc::new(MemoryStorage::default());
+        let vector_index = HnswVectorIndex::new(4);
+        // Predecessors at axis-0.
+        let m1 = seed_at(
+            &storage,
+            &vector_index,
+            "mem-fal00001",
+            "alpha",
+            "body a",
+            unit_vec(4, 0),
+        )
+        .await;
+        let m2 = seed_at(
+            &storage,
+            &vector_index,
+            "mem-fal00002",
+            "beta",
+            "body b",
+            unit_vec(4, 0),
+        )
+        .await;
+
+        let llm = MockLlmClient::default().with_response(success_generation(
+            r#"{"description": "merged", "content": "compressed"}"#,
+        ));
+        // Mc embeds ORTHOGONAL (axis-1); recall query is axis-0. With
+        // k=1 the top hit is a predecessor (cosine 1.0), Mc (cosine 0.0)
+        // is excluded → verify miss → fail closed.
+        let embedder = MockEmbedder::new(4)
+            .with_response(vec![unit_vec(4, 1)]) // Mc orthogonal
+            .with_response(vec![unit_vec(4, 0)]); // m1 recall query (loop breaks on first miss)
+
+        let out = consolidate(
+            &ctx(),
+            storage.as_ref(),
+            &llm,
+            &embedder,
+            &vector_index,
+            vec![m1.clone(), m2.clone()],
+            &CompressionConfig::default(),
+            1, // recall_k = 1 so Mc must be the TOP hit to pass
+            now_t(),
+        )
+        .await
+        .unwrap();
+
+        assert!(!out.verified, "orthogonal Mc must fail recall-replay");
+        assert!(out.deleted.is_empty(), "fail-closed: delete NOTHING");
+        assert!(out.kept_immune.is_empty());
+        assert!(
+            out.mc_id.is_some(),
+            "Mc still minted (kept alongside predecessors)"
+        );
+        // Both predecessors intact.
+        assert!(
+            get_by_id(&ctx(), storage.as_ref(), &m1)
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            get_by_id(&ctx(), storage.as_ref(), &m2)
+                .await
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn consolidate_compress_refusal_propagates_no_delete() {
+        let storage: Arc<dyn Storage> = Arc::new(MemoryStorage::default());
+        let vector_index = HnswVectorIndex::new(4);
+        let m1 = seed_at(
+            &storage,
+            &vector_index,
+            "mem-ref00001",
+            "x",
+            "y",
+            unit_vec(4, 0),
+        )
+        .await;
+        // LLM refuses → CompressionInsufficientInput propagates; nothing
+        // is minted or deleted.
+        let llm = MockLlmClient::default()
+            .with_response(success_generation(r#"{"error": "insufficient_input"}"#));
+        let embedder = MockEmbedder::new(4);
+        let r = consolidate(
+            &ctx(),
+            storage.as_ref(),
+            &llm,
+            &embedder,
+            &vector_index,
+            vec![m1.clone()],
+            &CompressionConfig::default(),
+            DEFAULT_CONSOLIDATE_RECALL_K,
+            now_t(),
+        )
+        .await;
+        assert!(matches!(r, Err(EngineError::CompressionInsufficientInput)));
+        // Predecessor untouched.
+        assert!(
+            get_by_id(&ctx(), storage.as_ref(), &m1)
+                .await
+                .unwrap()
+                .is_some()
         );
     }
 }

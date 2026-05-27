@@ -27,7 +27,10 @@ pub mod id;
 pub mod lifecycle;
 pub mod store;
 
-pub use compress::{CompressionConfig, CompressionWindow, compress};
+pub use compress::{
+    CompressionConfig, CompressionWindow, ConsolidateOutcome, DEFAULT_CONSOLIDATE_RECALL_K,
+    compress, consolidate,
+};
 pub use id::MemoryId;
 pub use origin::MemoryOrigin;
 pub use scope::{MemoryScope, MemoryScopeFilter};
