@@ -55,10 +55,13 @@ use crate::engine::lessons::transitions::{
     FeedbackPolarity, capture_feedback as transitions_capture_feedback, discard, promote,
     supersede as transitions_supersede,
 };
+use crate::engine::llm::LlmClient;
 use crate::engine::memory::{
-    MemoryId, MemoryOrigin, MemoryQuery, MemoryScope, MemoryScopeFilter, delete as memory_delete,
+    CompressionConfig, CompressionWindow, MemoryId, MemoryOrigin, MemoryQuery, MemoryScope,
+    MemoryScopeFilter, compress as memory_compress_fn, delete as memory_delete,
     get_by_id as memory_get_by_id, hybrid_search as memory_hybrid_search,
-    insert_with_provenance as memory_insert_with_provenance, rehydrate_vector_index,
+    insert_with_provenance as memory_insert_with_provenance,
+    recompute_citation_counts as memory_recompute_citation_counts, rehydrate_vector_index,
     search as memory_search, text_search as memory_text_search, update as memory_update,
 };
 use crate::engine::paths;
@@ -158,6 +161,15 @@ pub struct ServeState {
     storage: Arc<dyn Storage>,
     embedder: Arc<dyn Embedder>,
     vector_index: Arc<dyn VectorIndex>,
+    /// Optional LLM client for handlers that need generation (today:
+    /// `memory.compress`). `None` when no production adapter is
+    /// configured — the engine crate ships only `MockLlmClient`
+    /// (behind `test-fixtures`); production adapters land in the
+    /// monolith crate per the engine/monolith split. Handlers that
+    /// require an LLM return a clear dispatch error when it is absent
+    /// rather than panicking, so the rest of the RPC surface stays
+    /// available on an LLM-less daemon.
+    llm: Option<Arc<dyn LlmClient>>,
 }
 
 /// Run the serve loop. Returns when the transport closes — stdio EOF
@@ -217,6 +229,13 @@ async fn build_state() -> Result<ServeState> {
         storage,
         embedder,
         vector_index,
+        // No production LLM adapter ships in the engine crate — the
+        // sealed `LlmClient` trait is satisfied only by `MockLlmClient`
+        // (test-fixtures) today; real adapters land in the monolith
+        // crate. A daemon built from this crate therefore has no LLM,
+        // and `memory.compress` returns `Other("...no LLM configured")`
+        // until an adapter is wired. Every other RPC is unaffected.
+        llm: None,
     })
 }
 
@@ -248,6 +267,7 @@ where
             state.storage.as_ref(),
             state.embedder.as_ref(),
             state.vector_index.as_ref(),
+            state.llm.as_deref(),
         )
         .await;
         let json = serde_json::to_string(&response)
@@ -348,6 +368,7 @@ async fn process_line(
     storage: &dyn Storage,
     embedder: &dyn Embedder,
     vector_index: &dyn VectorIndex,
+    llm: Option<&dyn LlmClient>,
 ) -> Response {
     let req: Request = match serde_json::from_str(line) {
         Ok(r) => r,
@@ -363,6 +384,7 @@ async fn process_line(
         storage,
         embedder,
         vector_index,
+        llm,
     )
     .await
     {
@@ -430,6 +452,7 @@ async fn dispatch(
     storage: &dyn Storage,
     embedder: &dyn Embedder,
     vector_index: &dyn VectorIndex,
+    llm: Option<&dyn LlmClient>,
 ) -> std::result::Result<Value, DispatchError> {
     match method {
         "ping" => Ok(json!({ "ok": true, "version": env!("CARGO_PKG_VERSION") })),
@@ -449,6 +472,12 @@ async fn dispatch(
         }
         "memory.update" => memory_update_method(params, ctx, storage, embedder, vector_index).await,
         "memory.delete" => memory_delete_method(params, ctx, storage, vector_index).await,
+        "memory.compress" => {
+            memory_compress_method(params, ctx, storage, embedder, vector_index, llm).await
+        }
+        "memory.recompute_citations" => {
+            memory_recompute_citations_method(params, ctx, storage).await
+        }
         "task.log_phase" => task_log_phase(params, ctx, storage).await,
         "task.get_ledger" => task_get_ledger(params, ctx, storage).await,
         _ => Err(DispatchError::MethodNotFound),
@@ -1299,6 +1328,16 @@ async fn memory_get(
             "created_at": mem.frontmatter.created_at,
             "scope": mem.frontmatter.scope,
             "origin": mem.frontmatter.origin,
+            // Surfaced so a host can enforce the user-immunity invariant
+            // BEFORE issuing a force-delete (force bypasses the engine
+            // guard). `derived_from` lets the host reason about the
+            // compression chain (e.g. distinguish a compressed memory
+            // from a raw one).
+            "consumed_by_user_lessons": mem.frontmatter.consumed_by_user_lessons,
+            "derived_from": mem.frontmatter.derived_from
+                .iter()
+                .map(MemoryId::as_str)
+                .collect::<Vec<_>>(),
         })),
         Ok(None) => Err(DispatchError::NotFound(p.id)),
         Err(e) => Err(DispatchError::Other(anyhow!("memory.get failed: {e}"))),
@@ -1500,6 +1539,118 @@ async fn memory_delete_method(
         }
         Err(e) => Err(DispatchError::Other(anyhow!("memory.delete failed: {e}"))),
     }
+}
+
+#[derive(Deserialize)]
+struct MemoryCompressParams {
+    /// Explicit window — the memory ids to compress into one summary.
+    /// The host (which owns the satisfaction probe + candidate
+    /// collection) decides the window; the engine never auto-selects.
+    ids: Vec<String>,
+    /// Max LLM output tokens. Defaults to `CompressionConfig::default`.
+    #[serde(default)]
+    max_tokens: Option<usize>,
+    /// Sampling temperature. Defaults to `CompressionConfig::default`.
+    #[serde(default)]
+    temperature: Option<f32>,
+}
+
+/// `memory.compress` — pure exposure of the existing [`compress`] lib
+/// fn. Resolves the explicit id window, invokes the LLM summarizer,
+/// embeds + persists the new compressed memory `Mc` (with
+/// `derived_from = [ids...]` + summed citation counters), and returns
+/// its identity. Does NOT delete predecessors — that is the host's
+/// verified, gated terminal step (D-Cx4); the engine only mints `Mc`.
+///
+/// Requires an LLM. A daemon built without a configured adapter
+/// returns a clear error (the engine crate ships no production
+/// adapter; see [`ServeState::llm`]).
+///
+/// [`compress`]: crate::engine::memory::compress
+async fn memory_compress_method(
+    params: Value,
+    ctx: &Context,
+    storage: &dyn Storage,
+    embedder: &dyn Embedder,
+    vector_index: &dyn VectorIndex,
+    llm: Option<&dyn LlmClient>,
+) -> std::result::Result<Value, DispatchError> {
+    let p: MemoryCompressParams =
+        serde_json::from_value(params).map_err(|e| DispatchError::InvalidParams(e.to_string()))?;
+    if p.ids.is_empty() {
+        return Err(DispatchError::InvalidParams(
+            "ids required (non-empty)".into(),
+        ));
+    }
+    let llm = llm.ok_or_else(|| {
+        DispatchError::Other(anyhow!(
+            "memory.compress requires an LLM adapter, but none is configured on this engine"
+        ))
+    })?;
+
+    let window = CompressionWindow::Ids(p.ids.iter().map(|s| MemoryId::new(s.as_str())).collect());
+    let mut config = CompressionConfig::default();
+    if let Some(mt) = p.max_tokens {
+        config.max_tokens = mt;
+    }
+    if let Some(t) = p.temperature {
+        config.temperature = t;
+    }
+
+    match memory_compress_fn(
+        ctx,
+        storage,
+        llm,
+        embedder,
+        vector_index,
+        window,
+        &config,
+        Utc::now(),
+    )
+    .await
+    {
+        Ok(mc) => Ok(json!({
+            "id": mc.frontmatter.id.as_str(),
+            "description": mc.frontmatter.description,
+            "derived_from": mc.frontmatter.derived_from
+                .iter()
+                .map(MemoryId::as_str)
+                .collect::<Vec<_>>(),
+            "consumed_by_user_lessons": mc.frontmatter.consumed_by_user_lessons,
+        })),
+        // The LLM judged the window too thin/contradictory to summarize,
+        // OR the window resolved empty. A graceful no-op signal, not a
+        // defect — surface it as InvalidParams so the host can skip the
+        // window without treating it as an engine fault.
+        Err(EngineError::CompressionInsufficientInput) => Err(DispatchError::InvalidParams(
+            "compression refused: insufficient input for the supplied window".into(),
+        )),
+        Err(e) => Err(DispatchError::Other(anyhow!("memory.compress failed: {e}"))),
+    }
+}
+
+/// `memory.recompute_citations` — pure exposure of
+/// [`recompute_citation_counts`]. Walks all lessons + the
+/// predecessor→compressor index, repairs every memory's
+/// `consumed_by_user_lessons` counter to ground truth, and reports
+/// drift. A host runs this after a batch of compressions / deletions
+/// to confirm citation integrity survived the chain.
+///
+/// [`recompute_citation_counts`]: crate::engine::memory::recompute_citation_counts
+async fn memory_recompute_citations_method(
+    _params: Value,
+    ctx: &Context,
+    storage: &dyn Storage,
+) -> std::result::Result<Value, DispatchError> {
+    let stats = memory_recompute_citation_counts(ctx, storage)
+        .await
+        .map_err(|e| DispatchError::Other(anyhow!("memory.recompute_citations failed: {e}")))?;
+    Ok(json!({
+        "lessons_scanned": stats.lessons_scanned,
+        "memories_recomputed": stats.memories_recomputed,
+        "counters_repaired": stats.counters_repaired,
+        "orphan_citations": stats.orphan_citations,
+    }))
 }
 
 // ---- v1.4: manifest.assemble ---------------------------------------
@@ -1896,6 +2047,172 @@ mod tests {
         }
     }
 
+    // ---------------------------------------------------------------------
+    // CMP.1 — `memory.compress` + `memory.recompute_citations` dispatch
+    // arms. Exercise the RPC path end-to-end through `dispatch()` with a
+    // `MockLlmClient` injected (the engine ships no production adapter).
+    // ---------------------------------------------------------------------
+
+    async fn seed_memory(
+        storage: &Arc<dyn Storage>,
+        vector_index: &HnswVectorIndex,
+        embedder: &MockEmbedder,
+        id: &str,
+        desc: &str,
+        body: &str,
+    ) {
+        crate::engine::memory::store::insert(
+            &Context::single_user_local(),
+            storage.as_ref(),
+            embedder,
+            vector_index,
+            MemoryId::new(id),
+            desc,
+            body,
+            Utc::now(),
+        )
+        .await
+        .expect("seed insert");
+    }
+
+    #[tokio::test]
+    async fn memory_compress_dispatch_returns_mc_with_derived_from_and_summed_citations() {
+        use crate::engine::llm::{Generation, MockLlmClient};
+        use crate::engine::memory::store::increment_citation_count;
+
+        let ctx = Context::single_user_local();
+        let storage: Arc<dyn Storage> = Arc::new(MemoryStorage::default());
+        let vector_index = HnswVectorIndex::new(4);
+        let embedder = MockEmbedder::new(4).with_response(vec![vec![1.0, 0.0, 0.0, 0.0]]);
+        seed_memory(
+            &storage,
+            &vector_index,
+            &embedder,
+            "mem-rpc00001",
+            "first",
+            "body one",
+        )
+        .await;
+        seed_memory(
+            &storage,
+            &vector_index,
+            &embedder,
+            "mem-rpc00002",
+            "second",
+            "body two",
+        )
+        .await;
+        // M1 cited twice, M2 cited once → Mc should sum to 3.
+        for _ in 0..2 {
+            increment_citation_count(&ctx, storage.as_ref(), &MemoryId::new("mem-rpc00001"))
+                .await
+                .unwrap();
+        }
+        increment_citation_count(&ctx, storage.as_ref(), &MemoryId::new("mem-rpc00002"))
+            .await
+            .unwrap();
+
+        let llm = MockLlmClient::default().with_response(
+            Generation::new(r#"{"description":"gist","content":"compressed"}"#).with_parsed(
+                serde_json::from_str(r#"{"description":"gist","content":"compressed"}"#).unwrap(),
+            ),
+        );
+
+        let result = dispatch(
+            "memory.compress",
+            json!({ "ids": ["mem-rpc00001", "mem-rpc00002"] }),
+            &ctx,
+            storage.as_ref(),
+            &embedder,
+            &vector_index,
+            Some(&llm),
+        )
+        .await
+        .expect("memory.compress should succeed via dispatch");
+
+        let derived: Vec<String> = result["derived_from"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(derived, vec!["mem-rpc00001", "mem-rpc00002"]);
+        assert_eq!(result["consumed_by_user_lessons"], json!(3));
+        assert!(
+            result["id"].as_str().unwrap().starts_with("mem-c-"),
+            "Mc id should carry the compressed infix"
+        );
+    }
+
+    #[tokio::test]
+    async fn memory_compress_dispatch_missing_ids_is_invalid_params() {
+        let ctx = Context::single_user_local();
+        let storage: Arc<dyn Storage> = Arc::new(MemoryStorage::default());
+        let vector_index = HnswVectorIndex::new(4);
+        let embedder = MockEmbedder::new(4);
+        let err = dispatch(
+            "memory.compress",
+            json!({}),
+            &ctx,
+            storage.as_ref(),
+            &embedder,
+            &vector_index,
+            None,
+        )
+        .await
+        .expect_err("missing ids must fail");
+        assert!(matches!(err, DispatchError::InvalidParams(_)));
+    }
+
+    #[tokio::test]
+    async fn memory_compress_dispatch_without_llm_errors_clearly() {
+        let ctx = Context::single_user_local();
+        let storage: Arc<dyn Storage> = Arc::new(MemoryStorage::default());
+        let vector_index = HnswVectorIndex::new(4);
+        let embedder = MockEmbedder::new(4);
+        let err = dispatch(
+            "memory.compress",
+            json!({ "ids": ["mem-rpc00001"] }),
+            &ctx,
+            storage.as_ref(),
+            &embedder,
+            &vector_index,
+            None,
+        )
+        .await
+        .expect_err("no LLM configured must fail");
+        match err {
+            DispatchError::Other(e) => assert!(
+                e.to_string().contains("LLM"),
+                "error should name the missing LLM: {e}"
+            ),
+            other => panic!("expected Other(no-LLM), got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn memory_recompute_citations_dispatch_returns_stats() {
+        let ctx = Context::single_user_local();
+        let storage: Arc<dyn Storage> = Arc::new(MemoryStorage::default());
+        let vector_index = HnswVectorIndex::new(4);
+        let embedder = MockEmbedder::new(4);
+        // Empty store → a clean sweep with zero drift.
+        let result = dispatch(
+            "memory.recompute_citations",
+            json!({}),
+            &ctx,
+            storage.as_ref(),
+            &embedder,
+            &vector_index,
+            None,
+        )
+        .await
+        .expect("memory.recompute_citations should succeed");
+        assert_eq!(result["counters_repaired"], json!(0));
+        assert_eq!(result["orphan_citations"], json!(0));
+        assert!(result["lessons_scanned"].is_number());
+    }
+
     #[test]
     fn scope_filter_wire_any_of_matches_set() {
         let w = parse_wire(r#"{"kind":"any_of","scopes":["user",{"project":"loop"}]}"#);
@@ -2188,6 +2505,7 @@ mod tests {
             storage,
             embedder,
             vector_index,
+            llm: None,
         }
     }
 
