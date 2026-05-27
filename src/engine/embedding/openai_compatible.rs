@@ -72,21 +72,21 @@ impl OpenAiCompatibleEmbedder {
 
     /// Construct from environment with the Qwen-via-Ollama defaults.
     /// Overrides:
-    /// - `OPENSQUID_EMBEDDER_URL` (default `http://localhost:11434/v1`)
-    /// - `OPENSQUID_EMBEDDER_MODEL` (default `qwen3-embedding:4b`)
-    /// - `OPENSQUID_EMBEDDER_DIMENSIONS` (default `2560`)
-    /// - `OPENSQUID_EMBEDDER_API_KEY` (default none — Ollama doesn't
+    /// - `LOOP_EMBEDDER_URL` (default `http://localhost:11434/v1`)
+    /// - `LOOP_EMBEDDER_MODEL` (default `qwen3-embedding:4b`)
+    /// - `LOOP_EMBEDDER_DIMENSIONS` (default `2560`)
+    /// - `LOOP_EMBEDDER_API_KEY` (default none — Ollama doesn't
     ///   need auth)
     pub fn from_env() -> Result<Self, EmbeddingError> {
-        let url = std::env::var("OPENSQUID_EMBEDDER_URL")
+        let url = std::env::var("LOOP_EMBEDDER_URL")
             .unwrap_or_else(|_| "http://localhost:11434/v1".to_string());
-        let model = std::env::var("OPENSQUID_EMBEDDER_MODEL")
+        let model = std::env::var("LOOP_EMBEDDER_MODEL")
             .unwrap_or_else(|_| "qwen3-embedding:4b".to_string());
-        let dimensions: usize = std::env::var("OPENSQUID_EMBEDDER_DIMENSIONS")
+        let dimensions: usize = std::env::var("LOOP_EMBEDDER_DIMENSIONS")
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(2560);
-        let api_key = std::env::var("OPENSQUID_EMBEDDER_API_KEY").ok();
+        let api_key = std::env::var("LOOP_EMBEDDER_API_KEY").ok();
         Self::new(url, model, api_key, dimensions)
     }
 }

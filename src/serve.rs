@@ -198,7 +198,7 @@ async fn build_state() -> Result<ServeState> {
     // Ollama running Qwen3-Embedding-4B per the architecture decision;
     // env vars override (see OpenAiCompatibleEmbedder::from_env).
     let embedder = OpenAiCompatibleEmbedder::from_env()
-        .context("constructing embedder (OPENSQUID_EMBEDDER_* env)")?;
+        .context("constructing embedder (LOOP_EMBEDDER_* env)")?;
     let dims = embedder.dimensions();
     let embedder: Arc<dyn Embedder> = Arc::new(embedder);
     let vector_index: Arc<dyn VectorIndex> = Arc::new(HnswVectorIndex::new(dims));
@@ -226,7 +226,7 @@ async fn build_state() -> Result<ServeState> {
 
     // LLM client for handlers that need generation (today:
     // `memory.compress`). Mirrors the embedder's `from_env` — defaults
-    // to local Ollama (`OPENSQUID_LLM_*` overrides). Construction is
+    // to local Ollama (`LOOP_LLM_*` overrides). Construction is
     // config-only (no network), so a failure here is a genuine
     // misconfiguration; we log + continue with `None` so the rest of the
     // RPC surface stays available (memory.compress alone degrades to a

@@ -73,15 +73,15 @@ impl OpenAiCompatibleLlm {
 
     /// Construct from environment, mirroring
     /// [`crate::engine::embedding::OpenAiCompatibleEmbedder::from_env`]:
-    /// - `OPENSQUID_LLM_URL` (default `http://localhost:11434/v1`)
-    /// - `OPENSQUID_LLM_MODEL` (default `qwen2.5:14b-instruct-q4_K_M`)
-    /// - `OPENSQUID_LLM_API_KEY` (default none — Ollama needs no auth)
+    /// - `LOOP_LLM_URL` (default `http://localhost:11434/v1`)
+    /// - `LOOP_LLM_MODEL` (default `qwen2.5:14b-instruct-q4_K_M`)
+    /// - `LOOP_LLM_API_KEY` (default none — Ollama needs no auth)
     pub fn from_env() -> Result<Self, LlmError> {
-        let url = std::env::var("OPENSQUID_LLM_URL")
+        let url = std::env::var("LOOP_LLM_URL")
             .unwrap_or_else(|_| "http://localhost:11434/v1".to_string());
-        let model = std::env::var("OPENSQUID_LLM_MODEL")
+        let model = std::env::var("LOOP_LLM_MODEL")
             .unwrap_or_else(|_| "qwen2.5:14b-instruct-q4_K_M".to_string());
-        let api_key = std::env::var("OPENSQUID_LLM_API_KEY").ok();
+        let api_key = std::env::var("LOOP_LLM_API_KEY").ok();
         Self::new(url, model, api_key)
     }
 }
@@ -251,21 +251,21 @@ mod tests {
         // Don't assert on the live env; just that construction succeeds
         // with the documented defaults when the vars are absent.
         // (Other tests in the suite may set these — read + restore.)
-        let prior_url = std::env::var("OPENSQUID_LLM_URL").ok();
-        let prior_model = std::env::var("OPENSQUID_LLM_MODEL").ok();
+        let prior_url = std::env::var("LOOP_LLM_URL").ok();
+        let prior_model = std::env::var("LOOP_LLM_MODEL").ok();
         unsafe {
-            std::env::remove_var("OPENSQUID_LLM_URL");
-            std::env::remove_var("OPENSQUID_LLM_MODEL");
+            std::env::remove_var("LOOP_LLM_URL");
+            std::env::remove_var("LOOP_LLM_MODEL");
         }
         let llm = OpenAiCompatibleLlm::from_env().expect("from_env");
         assert_eq!(llm.base_url, "http://localhost:11434/v1");
         assert_eq!(llm.model, "qwen2.5:14b-instruct-q4_K_M");
         unsafe {
             if let Some(u) = prior_url {
-                std::env::set_var("OPENSQUID_LLM_URL", u);
+                std::env::set_var("LOOP_LLM_URL", u);
             }
             if let Some(m) = prior_model {
-                std::env::set_var("OPENSQUID_LLM_MODEL", m);
+                std::env::set_var("LOOP_LLM_MODEL", m);
             }
         }
     }
